@@ -1,0 +1,31 @@
+name: Wikipedia Biographical Digest
+
+on:
+  # Runs every day at 9:00 PM GMT (21:00 UTC)
+  # Note: in British Summer Time (BST, UTC+1) this will arrive at 10:00 PM.
+  # To shift it back to 9 PM BST in summer, change the hour below to 20.
+  schedule:
+    - cron: "0 21 * * *"
+
+  # Also lets you trigger it manually from the GitHub website at any time
+  workflow_dispatch:
+
+jobs:
+  send-digest:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run Wikipedia Biographical Digest
+        env:
+          YAHOO_EMAIL:        ${{ secrets.YAHOO_EMAIL }}
+          YAHOO_APP_PASSWORD: ${{ secrets.YAHOO_APP_PASSWORD }}
+          DIGEST_RECIPIENT:   ${{ secrets.DIGEST_RECIPIENT }}
+        run: python wikipedia_digest_email.py
