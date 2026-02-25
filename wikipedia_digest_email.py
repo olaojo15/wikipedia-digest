@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Wikipedia Biographical Digest — GitHub Actions / Email Edition v6
+Wikipedia Biographical Digest — GitHub Actions / Email Edition v7
 Uses Wikipedia's structured On This Day REST API (births + deaths only).
 Section-aware anecdote extraction skips cultural legacy / political analysis
 sections and targets personal life, character, and early life sections instead.
@@ -13,8 +13,11 @@ import json
 import time
 import logging
 import datetime
+import smtplib
 import urllib.request
 import urllib.parse
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 
 logging.basicConfig(
     stream=sys.stdout,
@@ -23,15 +26,18 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-# Resend API config — set via GitHub Secrets
-RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
-RESEND_FROM    = os.environ.get("RESEND_FROM", "onboarding@resend.dev")
-RECIPIENT      = os.environ.get("DIGEST_RECIPIENT", "")
+# Gmail SMTP config — set via GitHub Secrets
+GMAIL_EMAIL        = os.environ.get("GMAIL_EMAIL", "")
+GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "")
+RECIPIENT          = os.environ.get("DIGEST_RECIPIENT", "")
+
+SMTP_HOST = "smtp.gmail.com"
+SMTP_PORT = 587
 
 ANECDOTE_MAX_WORDS = 750
 
 HEADERS = {
-    "User-Agent": "WikipediaBiographicalDigest/4.0 (personal digest; private user)",
+    "User-Agent": "WikipediaBiographicalDigest/7.0 (personal digest; private user)",
     "Accept": "application/json",
 }
 
@@ -847,45 +853,28 @@ def build_email_html(people: list, date_display: str) -> str:
 
 
 def send_email(subject: str, html_body: str) -> None:
-    """Send the digest via Resend's REST API — no spam blocking."""
-    if not RESEND_API_KEY:
-        log.error("RESEND_API_KEY secret is not set. Aborting.")
+    """Send the digest via Gmail SMTP using an App Password."""
+    if not GMAIL_EMAIL or not GMAIL_APP_PASSWORD:
+        log.error("GMAIL_EMAIL or GMAIL_APP_PASSWORD secret is not set. Aborting.")
         sys.exit(1)
     if not RECIPIENT:
         log.error("DIGEST_RECIPIENT secret is not set. Aborting.")
         sys.exit(1)
 
-    # Use plain from address (no display name) to avoid 403 formatting issues
-    payload = json.dumps({
-        "from":    RESEND_FROM,
-        "to":      [RECIPIENT],
-        "subject": subject,
-        "html":    html_body,
-    }).encode("utf-8")
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"]    = f"Wikipedia Digest <{GMAIL_EMAIL}>"
+    msg["To"]      = RECIPIENT
+    msg.attach(MIMEText(html_body, "html", "utf-8"))
 
-    req = urllib.request.Request(
-        "https://api.resend.com/emails",
-        data=payload,
-        headers={
-            "Authorization": f"Bearer {RESEND_API_KEY}",
-            "Content-Type":  "application/json",
-        },
-        method="POST",
-    )
-
-    log.info("Sending email to %s via Resend…", RECIPIENT)
-    log.info("Sending from: %s", RESEND_FROM)
-    log.info("API key prefix: %s…", RESEND_API_KEY[:8] if RESEND_API_KEY else "MISSING")
-
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            result = json.loads(resp.read().decode("utf-8"))
-            log.info("Email sent successfully. Resend ID: %s", result.get("id", "unknown"))
-    except urllib.error.HTTPError as e:
-        # Read and log the full Resend error response so we can diagnose it
-        error_body = e.read().decode("utf-8", errors="replace")
-        log.error("Resend API error %d: %s", e.code, error_body)
-        raise
+    log.info("Connecting to Gmail SMTP (%s:%d)…", SMTP_HOST, SMTP_PORT)
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as server:
+        server.ehlo()
+        server.starttls()
+        server.ehlo()
+        server.login(GMAIL_EMAIL, GMAIL_APP_PASSWORD)
+        server.sendmail(GMAIL_EMAIL, RECIPIENT, msg.as_string())
+    log.info("Email sent successfully to %s.", RECIPIENT)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -901,7 +890,7 @@ def main():
     date_display = today.strftime("%-d %B %Y")
     date_str     = today.strftime("%Y-%m-%d")
 
-    log.info("=== Wikipedia Biographical Digest v6 starting for %s ===", date_str)
+    log.info("=== Wikipedia Biographical Digest v7 starting for %s ===", date_str)
 
     candidates = fetch_candidates(month_name, month_num, day_padded)
     # day (unpadded) is used inside the fallback for the article title
