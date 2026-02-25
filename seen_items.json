@@ -1,0 +1,42 @@
+{
+  "wikipedia": [
+    {
+      "title": "Don_Bradman",
+      "date": "2026-02-25"
+    },
+    {
+      "title": "Ric_Flair",
+      "date": "2026-02-25"
+    },
+    {
+      "title": "Anthony_Burgess",
+      "date": "2026-02-25"
+    },
+    {
+      "title": "Mark_Rothko",
+      "date": "2026-02-25"
+    }
+  ],
+  "obituaries": [
+    {
+      "url": "https://www.nytimes.com/2026/02/24/arts/music/eliane-radigue-dead.html",
+      "name": "Éliane Radigue",
+      "date": "2026-02-25"
+    },
+    {
+      "url": "https://www.nytimes.com/2026/02/24/science/susan-e-leeman-dead.html",
+      "name": "Susan Leeman",
+      "date": "2026-02-25"
+    },
+    {
+      "url": "https://www.theguardian.com/music/2026/feb/20/ken-peplowski-obituary",
+      "name": "Ken Peplowski",
+      "date": "2026-02-25"
+    },
+    {
+      "url": "https://www.theguardian.com/film/2026/feb/24/tom-noonan-obituary",
+      "name": "Tom Noonan",
+      "date": "2026-02-25"
+    }
+  ]
+}
