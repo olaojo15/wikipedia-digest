@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """
-Wikipedia Biographical Digest — GitHub Actions / Email Edition v7
-Uses Wikipedia's structured On This Day REST API (births + deaths only).
-Section-aware anecdote extraction skips cultural legacy / political analysis
-sections and targets personal life, character, and early life sections instead.
+Wikipedia Biographical Digest — GitHub Actions / Email Edition v8
+
+Changes from v7:
+  - Anecdote: 2-3 labelled snippets from distinct sections (~500 words total)
+  - Swap-out: dry biographies (no personal content) replaced by richer candidates
+  - Year extraction: strip IPA pronunciations + wider regex window (fixes Rothko-style errors)
+  - Taglines: year patterns stripped (no redundant dates)
 """
 
 import sys
@@ -34,10 +37,8 @@ RECIPIENT          = os.environ.get("DIGEST_RECIPIENT", "")
 SMTP_HOST = "smtp.gmail.com"
 SMTP_PORT = 587
 
-ANECDOTE_MAX_WORDS = 750
-
 HEADERS = {
-    "User-Agent": "WikipediaBiographicalDigest/7.0 (personal digest; private user)",
+    "User-Agent": "WikipediaBiographicalDigest/8.0 (personal digest; private user)",
     "Accept": "application/json",
 }
 
@@ -66,13 +67,12 @@ def http_get_json(url: str, retries: int = 3, delay: float = 2.0):
 def fetch_candidates(month_name: str, month_num: str, day: str) -> list:
     """
     Fetch person candidates for today's date.
-    Primary source: Wikipedia REST API (official numeric month format).
+    Primary: Wikipedia REST API (official numeric month format).
     Fallback: Wikipedia Action API parsing the date article's Births/Deaths sections.
     """
     candidates = []
     seen = set()
 
-    # ── Primary: REST API (numeric month, zero-padded) ───────────────────────
     rest_succeeded = False
     for category in ("births", "deaths"):
         url = (
@@ -112,9 +112,7 @@ def fetch_candidates(month_name: str, month_num: str, day: str) -> list:
         log.info("REST API succeeded — %d person candidates", len(candidates))
         return candidates
 
-    # ── Fallback: Action API — parse the date article ─────────────────────────
     log.warning("REST API returned no data; falling back to Action API date article")
-    # Use month name + unpadded day for the Wikipedia article title, e.g. "February_25"
     day_unpadded = str(int(day))
     candidates = _fallback_from_date_article(month_name, day_unpadded, seen)
 
@@ -153,24 +151,21 @@ def _fallback_from_date_article(month_name: str, day: str, seen: set) -> list:
         .get("content", "")
     )
 
-    # Parse Births and Deaths sections for linked person entries
-    # Format: "* [[Year]] – [[Person Name]], description (born/died YYYY)"
     link_pattern = re.compile(r'\[\[([^\|\]#]+)(?:\|[^\]]+)?\]\]')
     year_pattern  = re.compile(r'^\*\s*(\d{4})')
 
-    in_section = False
+    in_section   = False
     section_type = "births"
 
     for line in wikitext.splitlines():
         lower = line.lower().strip()
 
-        # Detect section headers
         if re.match(r'==\s*births\s*==', lower):
-            in_section = True
+            in_section   = True
             section_type = "births"
             continue
         elif re.match(r'==\s*deaths\s*==', lower):
-            in_section = True
+            in_section   = True
             section_type = "deaths"
             continue
         elif re.match(r'==\s*\w', lower) and in_section:
@@ -180,20 +175,16 @@ def _fallback_from_date_article(month_name: str, day: str, seen: set) -> list:
         if not in_section:
             continue
 
-        # Extract year from line
         year_m = year_pattern.match(line)
         year   = int(year_m.group(1)) if year_m else None
 
-        # Extract linked titles from line
         links = link_pattern.findall(line)
         for linked in links:
             linked = linked.strip()
-            # Skip year articles (just digits)
             if re.match(r'^\d+$', linked):
                 continue
             if linked in seen:
                 continue
-            # Basic person check
             if not _is_person(linked, ""):
                 continue
             seen.add(linked)
@@ -297,40 +288,61 @@ def get_biography(title: str) -> str:
 
 def extract_years_from_bio(extract: str, category: str, api_year) -> tuple:
     """
-    Extract birth and death years reliably by looking at the opening
-    parenthetical of the biography, e.g. '(15 April 1894 – 11 September 1971)'.
-    Falls back to searching the text for born/died patterns.
+    Improved year extraction (v8):
+    - Strips IPA pronunciation guides e.g. /ˈrɒθkoʊ/ from opening parenthetical
+    - Strips square-bracketed annotations e.g. [O.S. 3 April] [Russian: ...]
+    - Tries simple (YYYY–YYYY) first for speed
+    - Falls back to complex range with wider 100-char window (vs 60 in v7)
+    - Extended born/died fallback search window (120 chars vs 80)
     """
     birth_year = "?"
     death_year = "present"
 
-    # Best source: parenthetical year range at start of article
-    # Handles formats like "(1894–1971)", "(April 1894 – September 1971)",
-    # "(15 April [O.S. 3 April] 1894 – 11 September 1971)"
+    head = extract[:600]
+
+    # Strip IPA guide at start of parenthetical: (/ˈrɒθkoʊ/; → (
+    head = re.sub(r'\(/[^/)]+/;?\s*', '(', head)
+    # Strip square-bracketed content: [O.S. 3 April], [Russian: Маркус...]
+    head = re.sub(r'\[[^\[\]]{0,200}\]', '', head)
+
+    # 1. Simplest form: (YYYY–YYYY) or (YYYY-YYYY)
+    simple_m = re.search(
+        r'\(\s*(\b(?:1[0-9]{3}|20[0-9]{2})\b)\s*[–\-]\s*(\b(?:1[0-9]{3}|20[0-9]{2})\b)\s*\)',
+        head
+    )
+    if simple_m:
+        birth_year = simple_m.group(1)
+        death_year = simple_m.group(2)
+        return birth_year, death_year
+
+    # 2. Complex range: (DATE YYYY – DATE YYYY) — wider 100-char window
     range_m = re.search(
-        r'\(\s*[^()]{0,60}?(\b1[0-9]{3}|20[0-9]{2}\b)[^()]{0,60}?'
-        r'[–\-]\s*[^()]{0,60}?(\b1[0-9]{3}|20[0-9]{2}\b)\s*\)',
-        extract[:500]
+        r'\(\s*[^()]{0,100}?(\b(?:1[0-9]{3}|20[0-9]{2})\b)[^()]{0,60}?[–\-]\s*[^()]{0,60}?(\b(?:1[0-9]{3}|20[0-9]{2})\b)\s*\)',
+        head
     )
     if range_m:
         birth_year = range_m.group(1)
         death_year = range_m.group(2)
         return birth_year, death_year
 
-    # Second source: use the API year for the known category
+    # 3. Use API year for the known event
     if category == "births" and api_year:
         birth_year = str(api_year)
     elif category == "deaths" and api_year:
         death_year = str(api_year)
 
-    # Third source: search text for "born YYYY" / "died YYYY"
-    born_m = re.search(r'\bborn\b[^.]{0,80}?\b(1[0-9]{3}|20[0-9]{2})\b',
-                       extract[:1000], re.IGNORECASE)
+    # 4. Text pattern search with extended windows
+    born_m = re.search(
+        r'\bborn\b[^.]{0,120}?\b(1[0-9]{3}|20[0-9]{2})\b',
+        extract[:1500], re.IGNORECASE
+    )
     if born_m and birth_year == "?":
         birth_year = born_m.group(1)
 
-    died_m = re.search(r'\bdied\b[^.]{0,80}?\b(1[0-9]{3}|20[0-9]{2})\b',
-                       extract[:2000], re.IGNORECASE)
+    died_m = re.search(
+        r'\bdied\b[^.]{0,80}?\b(1[0-9]{3}|20[0-9]{2})\b',
+        extract[:2000], re.IGNORECASE
+    )
     if died_m:
         death_year = died_m.group(1)
 
@@ -403,7 +415,6 @@ _SECONDARY_SIGNALS = {
     ],
 }
 
-# Raise thresholds: primary needs 4 hits, secondary needs 3 hits
 _PRIMARY_THRESHOLD   = 4
 _SECONDARY_THRESHOLD = 3
 
@@ -441,38 +452,48 @@ def score_biography(extract: str) -> dict:
 
 def clean_tagline(api_description: str, extract: str) -> str:
     """
-    Returns a clean single-sentence description of the person.
-    Uses the Wikipedia API description (always short and curated) first.
-    Falls back to the first sentence of the biography, stripped of
-    parenthetical dates, pronunciations, and Old Style date markers.
+    Returns a clean single-sentence description with no year clutter.
+    Uses the Wikipedia API description first (already curated and short).
+    Falls back to the first clean sentence of the biography.
+    v8: strips year patterns from output so they don't duplicate the header.
     """
     if api_description and len(api_description) > 15:
         desc = api_description.strip()
         desc = desc[0].upper() + desc[1:]
         if not desc.endswith("."):
             desc += "."
-        return desc
+    else:
+        # Fallback: strip all parentheticals from first paragraph, return first sentence
+        first_para = extract.split("\n\n")[0] if "\n\n" in extract else extract[:800]
+        cleaned_para = first_para
+        for _ in range(6):
+            cleaned_para = re.sub(r'\[[^\[\]]*\]', '', cleaned_para)
+            cleaned_para = re.sub(r'\([^()]*\)', '', cleaned_para)
+        cleaned_para = re.sub(r'\s{2,}', ' ', cleaned_para).strip()
+        sentences = re.split(r'(?<=[.!?])\s+', cleaned_para)
+        desc = ""
+        for sent in sentences[:4]:
+            sent = sent.strip()
+            if len(sent) > 40:
+                desc = sent
+                break
+        if not desc:
+            desc = cleaned_para[:200] if cleaned_para else ""
 
-    # Fallback: strip all parentheticals from the first paragraph first
-    # (handles nested patterns like "(15 April [O.S. 3 April] 1894 – 1971)"),
-    # then split into sentences and return the first clean one.
-    first_para = extract.split("\n\n")[0] if "\n\n" in extract else extract[:800]
-    cleaned_para = first_para
-    for _ in range(6):
-        cleaned_para = re.sub(r'\[[^\[\]]*\]', '', cleaned_para)
-        cleaned_para = re.sub(r'\([^()]*\)', '', cleaned_para)
-    cleaned_para = re.sub(r'\s{2,}', ' ', cleaned_para).strip()
-    sentences = re.split(r'(?<=[.!?])\s+', cleaned_para)
-    for sent in sentences[:4]:
-        sent = sent.strip()
-        if len(sent) > 40:
-            return sent
-    return cleaned_para[:200] if cleaned_para else ""
+    # Strip redundant year patterns (they appear in the header already)
+    desc = re.sub(r'\(\s*\d{4}\s*[–\-]\s*\d{4}\s*\)', '', desc)
+    desc = re.sub(r'\b(?:born|died)\b\s+\d{4}\b', '', desc, flags=re.IGNORECASE)
+    desc = re.sub(r'\s{2,}', ' ', desc).strip()
+    # Clean trailing space before punctuation
+    desc = re.sub(r'\s+\.', '.', desc)
+    desc = re.sub(r'\s{2,}', ' ', desc).strip()
+    if desc and not desc.endswith("."):
+        desc += "."
+    return desc
 
 
 # ── Section classification ────────────────────────────────────────────────────
 
-# Sections to skip entirely when building the anecdote
 _SKIP_SECTION_KEYWORDS = {
     "popular culture", "in fiction", "cultural legacy", "cultural impact",
     "cultural depictions", "adaptations", "film adaptations", "in media",
@@ -486,7 +507,6 @@ _SKIP_SECTION_KEYWORDS = {
     "memorials", "statues", "postage stamps",
 }
 
-# Sections to actively prefer when building the anecdote
 _PREFER_SECTION_KEYWORDS = {
     "personal life", "private life", "early life", "childhood",
     "early years", "youth", "education", "upbringing",
@@ -498,10 +518,6 @@ _PREFER_SECTION_KEYWORDS = {
 
 
 def _section_score(header: str) -> float:
-    """
-    Returns a multiplier for sentences in this section.
-    0.0 = skip entirely. 1.0 = normal. 2.0 = preferred.
-    """
     h = header.lower().strip()
     for kw in _SKIP_SECTION_KEYWORDS:
         if kw in h:
@@ -516,8 +532,6 @@ def _split_sections(extract: str) -> list:
     """
     Split a Wikipedia plain-text extract into sections.
     Returns a list of dicts: {header, text, multiplier}.
-    Section headers are detected as short lines (< 80 chars) that don't
-    end with sentence punctuation, surrounded by blank lines.
     """
     sections = []
     current_header = ""
@@ -533,14 +547,12 @@ def _split_sections(extract: str) -> list:
         lines = para.splitlines()
         first_line = lines[0].strip()
 
-        # A section header is a short, non-sentence line standing alone
-        # or followed by content
         is_header = (
             len(first_line) > 0
             and len(first_line) < 80
-            and not first_line[-1] in ".!?,;"
-            and not re.match(r'^\d', first_line)  # doesn't start with a number
-            and len(lines) == 1                    # standalone line
+            and first_line[-1] not in ".!?,;"
+            and not re.match(r'^\d', first_line)
+            and len(lines) == 1
         )
 
         if is_header and current_chunks:
@@ -566,8 +578,6 @@ def _split_sections(extract: str) -> list:
     return sections
 
 
-# ── Sentence-level cultural content filter ───────────────────────────────────
-
 _CULTURAL_SENTENCE_PATTERNS = [
     r'\bportray\w*\b.*\bfilm\b',
     r'\bfilm\b.*\bportray\w*\b',
@@ -587,80 +597,112 @@ def _is_cultural_sentence(sentence: str) -> bool:
     return any(re.search(p, s) for p in _CULTURAL_SENTENCE_PATTERNS)
 
 
-def extract_anecdote(extract: str, signals: list) -> str:
+def extract_anecdote(extract: str, signals: list) -> list:
     """
-    Section-aware anecdote extraction:
-    1. Splits the biography into sections
-    2. Skips cultural legacy / political analysis sections entirely
-    3. Boosts sentences from personal life / character sections
-    4. Scores remaining sentences against editorial signals
-    5. Returns up to ANECDOTE_MAX_WORDS words from the richest passage
+    v8: Returns a list of {"label": str, "text": str} dicts — 2 to 3 snippets
+    from distinct sections, ~500 words total.
+
+    Strategy:
+    1. Preferred sections (Personal life, Early life, etc.) are tried first
+    2. Normal biographical sections fill remaining budget
+    3. Each snippet targets ~170-200 words, starting near the most signal-rich sentence
+    4. Cultural legacy / political analysis sections are skipped entirely
+    5. If a section yields < 20 words it is discarded (too thin)
     """
-    all_signals = {**_PRIMARY_SIGNALS, **_SECONDARY_SIGNALS}
+    all_sigs = {**_PRIMARY_SIGNALS, **_SECONDARY_SIGNALS}
     scoring_patterns = []
     for sig in signals:
-        scoring_patterns.extend(all_signals.get(sig, []))
+        scoring_patterns.extend(all_sigs.get(sig, []))
     if not scoring_patterns:
         for patterns in _SECONDARY_SIGNALS.values():
             scoring_patterns.extend(patterns)
 
     sections = _split_sections(extract)
 
-    # Build a flat list of (sentence, section_multiplier, global_position)
-    all_sentences = []
-    total_section_chars = sum(len(s["text"]) for s in sections) or 1
+    preferred = [(s["header"], s["text"]) for s in sections if s["multiplier"] == 2.0]
+    normal    = [(s["header"], s["text"]) for s in sections if s["multiplier"] == 1.0]
 
-    char_pos = 0
-    for section in sections:
-        mult = section["multiplier"]
-        if mult == 0.0:
-            char_pos += len(section["text"])
-            continue  # Skip this section entirely
+    pool = preferred + normal   # preferred sections come first
 
-        raw_sentences = [
-            s.strip()
-            for s in re.split(r'(?<=[.!?])\s+', section["text"])
-            if len(s.strip()) > 35
+    snippets    = []
+    total_words = 0
+
+    for header, text in pool:
+        if len(snippets) >= 3 or total_words >= 500:
+            break
+
+        sentences = [
+            s.strip() for s in re.split(r'(?<=[.!?])\s+', text)
+            if len(s.strip()) > 35 and not _is_cultural_sentence(s)
         ]
-        for sent in raw_sentences:
-            if _is_cultural_sentence(sent):
-                continue
-            all_sentences.append((sent, mult, char_pos / total_section_chars))
-            char_pos += len(sent)
+        if not sentences:
+            continue
 
-    if not all_sentences:
-        # Fallback: use full extract without section filtering
-        raw = [s.strip() for s in re.split(r'(?<=[.!?])\s+', extract) if len(s.strip()) > 35]
-        all_sentences = [(s, 1.0, i / max(len(raw), 1)) for i, s in enumerate(raw)]
+        # Score each sentence by signal density
+        scored = []
+        for i, sent in enumerate(sentences):
+            hits = sum(1 for p in scoring_patterns if re.search(p, sent.lower()))
+            scored.append((hits, i, sent))
+        scored.sort(key=lambda x: (-x[0], x[1]))
 
-    # Score each sentence
-    scored = []
-    for idx, (sent, mult, pos) in enumerate(all_sentences):
-        sent_lower = sent.lower()
-        hits = sum(1 for p in scoring_patterns if re.search(p, sent_lower))
-        # Small position bonus for middle of article
-        pos_bonus = 0.5 if 0.10 < pos < 0.85 else 0.0
-        scored.append((hits * mult + pos_bonus, idx, sent))
+        best_idx = scored[0][1]
 
-    scored.sort(key=lambda x: (-x[0], x[1]))
-    best_idx = scored[0][1]
+        # Word budget per snippet: ~200 words, but respect remaining budget
+        budget = min(200, 500 - total_words)
 
-    # Build window around best sentence up to word limit
-    start = max(0, best_idx - 1)
-    words_so_far = 0
-    window = []
+        # Window starting one sentence before the richest hit
+        start  = max(0, best_idx - 1)
+        window = []
+        wc     = 0
+        for i in range(start, len(sentences)):
+            sw = len(sentences[i].split())
+            if wc + sw > budget and window:
+                break
+            window.append(sentences[i])
+            wc += sw
 
-    for i in range(start, len(all_sentences)):
-        sent = all_sentences[i][0]
-        wc   = len(sent.split())
-        if words_so_far + wc > ANECDOTE_MAX_WORDS and window:
-            break
-        window.append(sent)
-        words_so_far += wc
-        if words_so_far >= ANECDOTE_MAX_WORDS:
-            break
+        if wc < 20:   # Too thin — skip this section
+            continue
 
-    return " ".join(window).strip()
+        # Format the section label for display
+        label = header.strip().title() if header.strip() else "Life & Character"
+        # Replace bland generic labels
+        if label.lower() in {"biography", "life", "overview", "introduction", "background", ""}:
+            label = "Life & Character"
+
+        snippets.append({"label": label, "text": " ".join(window)})
+        total_words += wc
+
+    if not snippets:
+        # Ultimate fallback: take up to 400 words from non-cultural extract text
+        all_sents = [
+            s.strip() for s in re.split(r'(?<=[.!?])\s+', extract)
+            if len(s.strip()) > 35 and not _is_cultural_sentence(s)
+        ]
+        fallback_text = []
+        wc = 0
+        for s in all_sents:
+            sw = len(s.split())
+            if wc + sw > 400:
+                break
+            fallback_text.append(s)
+            wc += sw
+        snippets = [{"label": "Life & Character", "text": " ".join(fallback_text)}]
+
+    return snippets
+
+
+def has_rich_anecdote(candidate: dict) -> bool:
+    """
+    Returns True if the candidate has substantive personal/human-interest content.
+    Used to swap out candidates whose biographies are too dry.
+    """
+    snippets = candidate.get("anecdote_snippets", [])
+    if not snippets:
+        return False
+    total_words = sum(len(s.get("text", "").split()) for s in snippets)
+    # Rich = at least 2 labelled snippets OR 100+ words of meaningful content
+    return len(snippets) >= 2 or total_words >= 100
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -668,14 +710,8 @@ def extract_anecdote(extract: str, signals: list) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _diversity_key(candidate: dict) -> str:
-    """
-    Returns a short diversity key combining nationality + broad field,
-    extracted from the API description.
-    e.g. "Argentine politician", "Soviet statesman" → "argentine_politics"
-    """
     desc = candidate.get("description", "").lower()
 
-    # Nationality
     nationalities = [
         "american", "british", "english", "scottish", "irish", "welsh",
         "french", "german", "italian", "spanish", "russian", "soviet",
@@ -686,7 +722,6 @@ def _diversity_key(candidate: dict) -> str:
     ]
     nationality = next((n for n in nationalities if n in desc), "other")
 
-    # Broad field
     field_map = {
         "politics":   ["politician", "president", "prime minister", "senator",
                        "minister", "statesman", "diplomat", "governor", "chancellor"],
@@ -733,9 +768,9 @@ def select_four(ranked: list) -> list:
     if len(ranked) <= 4:
         return ranked
 
-    selected      = []
-    era_counts    = {}
-    div_key_used  = set()
+    selected     = []
+    era_counts   = {}
+    div_key_used = set()
 
     for p in ranked:
         era = _era(p["birth_year"])
@@ -786,6 +821,16 @@ _TAG = (
     "padding:3px 9px;margin:2px 3px 2px 0;letter-spacing:.04em;"
 )
 
+_SNIPPET_LABEL_STYLE = (
+    "font-size:11px;font-weight:700;color:#9ca3af;"
+    "letter-spacing:.08em;text-transform:uppercase;"
+    "margin:14px 0 3px;"
+)
+
+_SNIPPET_TEXT_STYLE = (
+    "font-size:15px;line-height:1.78;color:#2d2d2d;margin:0 0 6px;"
+)
+
 
 def _card(p: dict) -> str:
     birth  = p["birth_year"]
@@ -799,19 +844,38 @@ def _card(p: dict) -> str:
     )
     tags_block = f'<div style="margin-top:13px;">{tags}</div>' if tags else ""
 
+    # Render labelled snippets
+    snippets = p.get("anecdote_snippets", [])
+    if snippets:
+        parts = []
+        for i, snippet in enumerate(snippets):
+            label = snippet.get("label", "")
+            text  = snippet.get("text", "")
+            top_margin = "margin:16px 0 3px;" if i == 0 else "margin:14px 0 3px;"
+            label_style = _SNIPPET_LABEL_STYLE.replace("margin:14px 0 3px;", top_margin)
+            if label:
+                parts.append(f'<p style="{label_style}">{label}</p>')
+            parts.append(f'<p style="{_SNIPPET_TEXT_STYLE}">{text}</p>')
+        anecdote_block = "\n      ".join(parts)
+    else:
+        # Should rarely reach here — fallback for safety
+        anecdote_block = (
+            f'<p style="{_SNIPPET_TEXT_STYLE}">{p.get("anecdote", "")}</p>'
+        )
+
     return f"""
     <div style="background:#ffffff;border:1px solid #e5e0d8;border-radius:12px;
                 padding:24px 26px 20px;margin-bottom:24px;">
       <p style="font-size:11px;font-weight:600;color:#9ca3af;text-transform:uppercase;
                 letter-spacing:.09em;margin:0 0 7px;">{source}</p>
-      <div style="margin-bottom:12px;">
+      <div style="margin-bottom:4px;">
         <span style="font-size:20px;font-weight:700;color:#1a1a1a;">{p['name']}</span>
         <span style="font-size:13px;color:#6b7280;margin-left:8px;">{years}</span>
         <p style="font-size:14px;color:#555;font-style:italic;margin:6px 0 0;">{p['tagline']}</p>
       </div>
       <p style="font-size:11px;font-weight:700;color:#2e6e4e;letter-spacing:.1em;
-                text-transform:uppercase;margin:16px 0 7px;">The Anecdote</p>
-      <p style="font-size:15px;line-height:1.78;color:#2d2d2d;margin:0;">{p['anecdote']}</p>
+                text-transform:uppercase;margin:16px 0 0;">The Anecdote</p>
+      {anecdote_block}
       {tags_block}
       <a href="{p['url']}"
          style="display:inline-block;margin-top:18px;font-size:14px;
@@ -883,17 +947,16 @@ def send_email(subject: str, html_body: str) -> None:
 
 def main():
     today        = datetime.date.today()
-    month_name   = today.strftime("%B")        # "February"
-    month_num    = today.strftime("%m")         # "02"  (zero-padded, as API expects)
-    day          = today.strftime("%-d")        # "25"  (no leading zero)
-    day_padded   = today.strftime("%d")         # "25"  (zero-padded for API)
+    month_name   = today.strftime("%B")         # "February"
+    month_num    = today.strftime("%m")          # "02" (zero-padded, as API expects)
+    day          = today.strftime("%-d")         # "25" (no leading zero)
+    day_padded   = today.strftime("%d")          # "25" (zero-padded for API)
     date_display = today.strftime("%-d %B %Y")
     date_str     = today.strftime("%Y-%m-%d")
 
-    log.info("=== Wikipedia Biographical Digest v7 starting for %s ===", date_str)
+    log.info("=== Wikipedia Biographical Digest v8 starting for %s ===", date_str)
 
     candidates = fetch_candidates(month_name, month_num, day_padded)
-    # day (unpadded) is used inside the fallback for the article title
     if not candidates:
         log.error("No person candidates found. Aborting.")
         sys.exit(1)
@@ -908,7 +971,6 @@ def main():
             log.info("Skipping %s — biography too short or missing", title)
             continue
 
-        # Extract years from biography text (most reliable source)
         birth_year, death_year = extract_years_from_bio(
             extract, candidate["source"], candidate["api_year"]
         )
@@ -916,15 +978,21 @@ def main():
         candidate["death_year"] = death_year
 
         score = score_biography(extract)
+
+        # Build labelled snippets (v8 anecdote format)
+        anecdote_snippets = extract_anecdote(extract, score["signals"])
+
         candidate.update({
-            "extract":  extract,
-            "score":    score,
-            "signals":  score["signals"],
-            "tagline":  clean_tagline(candidate["description"], extract),
-            "anecdote": extract_anecdote(extract, score["signals"]),
-            "url":      "https://en.wikipedia.org/wiki/" + urllib.parse.quote(
-                            title.replace(" ", "_")
-                        ),
+            "extract":           extract,
+            "score":             score,
+            "signals":           score["signals"],
+            "tagline":           clean_tagline(candidate["description"], extract),
+            "anecdote_snippets": anecdote_snippets,
+            # Plain-text anecdote kept for compatibility
+            "anecdote":          " ".join(s["text"] for s in anecdote_snippets),
+            "url":               "https://en.wikipedia.org/wiki/" + urllib.parse.quote(
+                                     title.replace(" ", "_")
+                                 ),
         })
         scored.append(candidate)
         time.sleep(0.4)
@@ -934,8 +1002,19 @@ def main():
         sys.exit(1)
 
     log.info("Scored %d biographies", len(scored))
-    ranked   = sorted(scored, key=lambda x: -x["score"]["total"])
-    selected = select_four(ranked)
+    ranked = sorted(scored, key=lambda x: -x["score"]["total"])
+
+    # v8: Prefer candidates with rich personal anecdotes; defer dry ones
+    rich_pool = [p for p in ranked if has_rich_anecdote(p)]
+    dry_pool  = [p for p in ranked if not has_rich_anecdote(p)]
+    log.info(
+        "Anecdote quality — rich: %d, dry (deferred): %d",
+        len(rich_pool), len(dry_pool)
+    )
+
+    # Rich candidates ranked first; dry ones fill any remaining slots
+    ordered  = rich_pool + dry_pool
+    selected = select_four(ordered)
     log.info("Selected: %s", [p["name"] for p in selected])
 
     html    = build_email_html(selected, date_display)
