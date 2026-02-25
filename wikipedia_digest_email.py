@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Wikipedia Biographical Digest — GitHub Actions / Email Edition v5
+Wikipedia Biographical Digest — GitHub Actions / Email Edition v6
 Uses Wikipedia's structured On This Day REST API (births + deaths only).
 Section-aware anecdote extraction skips cultural legacy / political analysis
 sections and targets personal life, character, and early life sections instead.
@@ -855,8 +855,9 @@ def send_email(subject: str, html_body: str) -> None:
         log.error("DIGEST_RECIPIENT secret is not set. Aborting.")
         sys.exit(1)
 
+    # Use plain from address (no display name) to avoid 403 formatting issues
     payload = json.dumps({
-        "from":    f"Wikipedia Digest <{RESEND_FROM}>",
+        "from":    RESEND_FROM,
         "to":      [RECIPIENT],
         "subject": subject,
         "html":    html_body,
@@ -873,9 +874,18 @@ def send_email(subject: str, html_body: str) -> None:
     )
 
     log.info("Sending email to %s via Resend…", RECIPIENT)
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        result = json.loads(resp.read().decode("utf-8"))
-        log.info("Email sent successfully. Resend ID: %s", result.get("id", "unknown"))
+    log.info("Sending from: %s", RESEND_FROM)
+    log.info("API key prefix: %s…", RESEND_API_KEY[:8] if RESEND_API_KEY else "MISSING")
+
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            result = json.loads(resp.read().decode("utf-8"))
+            log.info("Email sent successfully. Resend ID: %s", result.get("id", "unknown"))
+    except urllib.error.HTTPError as e:
+        # Read and log the full Resend error response so we can diagnose it
+        error_body = e.read().decode("utf-8", errors="replace")
+        log.error("Resend API error %d: %s", e.code, error_body)
+        raise
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -891,7 +901,7 @@ def main():
     date_display = today.strftime("%-d %B %Y")
     date_str     = today.strftime("%Y-%m-%d")
 
-    log.info("=== Wikipedia Biographical Digest v5 starting for %s ===", date_str)
+    log.info("=== Wikipedia Biographical Digest v6 starting for %s ===", date_str)
 
     candidates = fetch_candidates(month_name, month_num, day_padded)
     # day (unpadded) is used inside the fallback for the article title
