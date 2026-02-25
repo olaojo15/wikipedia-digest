@@ -1,12 +1,28 @@
 #!/usr/bin/env python3
 """
-Wikipedia Biographical Digest — GitHub Actions / Email Edition v8
+Wikipedia Biographical Digest + Obituary Digest — v9.1
 
-Changes from v7:
-  - Anecdote: 2-3 labelled snippets from distinct sections (~500 words total)
-  - Swap-out: dry biographies (no personal content) replaced by richer candidates
-  - Year extraction: strip IPA pronunciations + wider regex window (fixes Rothko-style errors)
-  - Taglines: year patterns stripped (no redundant dates)
+Sections:
+  1. Wikipedia On This Day — 4 biographical entries with labelled snippets
+  2. Obituary Digest — 4 recent obituaries (2 NYT + 2 Guardian) via RSS,
+     with archive.ph / Wayback / original URL fallback
+
+v9 changes from v8.1:
+  - Randomisation: light shuffle so repeated runs on the same date vary
+  - Obituary section: RSS feeds → archive resolution → scoring → 2-3 sentence teaser
+  - Fault-tolerant: obituary failures don't block the Wikipedia section
+
+v9.1 changes — scoring refinements based on user's editorial taste:
+  - 5 new secondary signal categories:
+      direct_quote      — detects sentences containing the subject's own words
+      chance_encounter  — pivotal moments of serendipity ("overheard", "one day", "wrong turn")
+      late_bloom        — figures overlooked for years then discovered late in life
+      origin_story      — humble beginnings, garage workshops, family formative moments
+      vivid_detail      — eccentric concrete details (coffins, hidden drawings, daily rituals)
+  - Teaser extraction now gives a strong bonus to sentences with direct quotes (score +2.0),
+    speech attribution (+1.0), vivid personal detail, and origin story context
+  - Expanded: diy, defiance, heretic, humanising, irony signal patterns
+  - New SIGNAL_LABELS for all five new categories
 """
 
 import sys
@@ -14,13 +30,16 @@ import os
 import re
 import json
 import time
+import random
 import logging
 import datetime
 import smtplib
 import urllib.request
 import urllib.parse
+import xml.etree.ElementTree as ET
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email.utils import parsedate_to_datetime
 
 logging.basicConfig(
     stream=sys.stdout,
@@ -38,9 +57,80 @@ SMTP_HOST = "smtp.gmail.com"
 SMTP_PORT = 587
 
 HEADERS = {
-    "User-Agent": "WikipediaBiographicalDigest/8.0 (personal digest; private user)",
+    "User-Agent": "WikipediaBiographicalDigest/9.0 (personal digest; private user)",
     "Accept": "application/json",
 }
+
+# Seen-items file — lives alongside the script in the repo root.
+# The GitHub Actions workflow commits it back after each run so
+# the same bio or obituary is never sent twice.
+_SEEN_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "seen_items.json")
+_SEEN_RETENTION_DAYS = 90   # entries older than this are pruned
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Seen-items persistence  (v9.2)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def load_seen() -> dict:
+    """
+    Load the seen-items registry from disk.
+    Returns a dict:
+        {
+          "wikipedia":  [{"title": str, "date": "YYYY-MM-DD"}, ...],
+          "obituaries": [{"url": str, "name": str, "date": "YYYY-MM-DD"}, ...]
+        }
+    Creates an empty registry if the file doesn't exist yet.
+    """
+    if not os.path.exists(_SEEN_FILE):
+        log.info("No seen_items.json found — starting fresh.")
+        return {"wikipedia": [], "obituaries": []}
+    try:
+        with open(_SEEN_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        log.info(
+            "Loaded seen_items.json — %d Wikipedia, %d obituary entries",
+            len(data.get("wikipedia", [])),
+            len(data.get("obituaries", [])),
+        )
+        return data
+    except Exception as exc:
+        log.warning("Could not read seen_items.json (%s) — starting fresh.", exc)
+        return {"wikipedia": [], "obituaries": []}
+
+
+def save_seen(seen: dict, new_wiki_titles: list, new_obit_urls: list) -> None:
+    """
+    Append newly-sent items to the registry and prune entries older than
+    _SEEN_RETENTION_DAYS days, then write back to disk.
+    """
+    today_str = datetime.date.today().isoformat()
+    cutoff    = (
+        datetime.date.today() - datetime.timedelta(days=_SEEN_RETENTION_DAYS)
+    ).isoformat()
+
+    # Append new Wikipedia titles
+    for title in new_wiki_titles:
+        seen["wikipedia"].append({"title": title, "date": today_str})
+
+    # Append new obituary URLs
+    for url, name in new_obit_urls:
+        seen["obituaries"].append({"url": url, "name": name, "date": today_str})
+
+    # Prune old entries
+    seen["wikipedia"]  = [e for e in seen["wikipedia"]  if e.get("date", "") >= cutoff]
+    seen["obituaries"] = [e for e in seen["obituaries"] if e.get("date", "") >= cutoff]
+
+    try:
+        with open(_SEEN_FILE, "w", encoding="utf-8") as f:
+            json.dump(seen, f, indent=2, ensure_ascii=False)
+        log.info(
+            "saved seen_items.json — %d Wikipedia, %d obituary entries",
+            len(seen["wikipedia"]),
+            len(seen["obituaries"]),
+        )
+    except Exception as exc:
+        log.error("Could not write seen_items.json: %s", exc)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -288,12 +378,12 @@ def get_biography(title: str) -> str:
 
 def extract_years_from_bio(extract: str, category: str, api_year) -> tuple:
     """
-    Improved year extraction (v8):
-    - Strips IPA pronunciation guides e.g. /ˈrɒθkoʊ/ from opening parenthetical
-    - Strips square-bracketed annotations e.g. [O.S. 3 April] [Russian: ...]
-    - Tries simple (YYYY–YYYY) first for speed
-    - Falls back to complex range with wider 100-char window (vs 60 in v7)
-    - Extended born/died fallback search window (120 chars vs 80)
+    Robust year extraction (v8.1):
+    - Strips IPA guides and square-bracketed annotations
+    - Finds ALL (YYYY–YYYY) parentheticals in the opening text
+    - Picks the one with the earliest first year (= actual birth year)
+      which avoids grabbing art-period ranges like (1940–1970) for Rothko
+    - Falls back to complex date ranges, then born/died text patterns
     """
     birth_year = "?"
     death_year = "present"
@@ -301,28 +391,35 @@ def extract_years_from_bio(extract: str, category: str, api_year) -> tuple:
     head = extract[:600]
 
     # Strip IPA guide at start of parenthetical: (/ˈrɒθkoʊ/; → (
-    head = re.sub(r'\(/[^/)]+/;?\s*', '(', head)
+    head = re.sub(r'\(/[^/)]+/[,;]?\s*', '(', head)
     # Strip square-bracketed content: [O.S. 3 April], [Russian: Маркус...]
     head = re.sub(r'\[[^\[\]]{0,200}\]', '', head)
 
-    # 1. Simplest form: (YYYY–YYYY) or (YYYY-YYYY)
-    simple_m = re.search(
+    # 1. Collect ALL year-range parentheticals (both simple and complex forms)
+    #    then pick the one with the earliest first year (= true birth year).
+    #    This avoids grabbing art-period ranges like (1940–1970) for Rothko
+    #    when the real birth–death range is (Sep 25, 1903 – Feb 25, 1970).
+    candidates_yr = []
+
+    # Simple form: (YYYY–YYYY)
+    for m in re.finditer(
         r'\(\s*(\b(?:1[0-9]{3}|20[0-9]{2})\b)\s*[–\-]\s*(\b(?:1[0-9]{3}|20[0-9]{2})\b)\s*\)',
         head
-    )
-    if simple_m:
-        birth_year = simple_m.group(1)
-        death_year = simple_m.group(2)
-        return birth_year, death_year
+    ):
+        candidates_yr.append((int(m.group(1)), m.group(1), m.group(2)))
 
-    # 2. Complex range: (DATE YYYY – DATE YYYY) — wider 100-char window
-    range_m = re.search(
+    # Complex form: (DATE YYYY – DATE YYYY)
+    for m in re.finditer(
         r'\(\s*[^()]{0,100}?(\b(?:1[0-9]{3}|20[0-9]{2})\b)[^()]{0,60}?[–\-]\s*[^()]{0,60}?(\b(?:1[0-9]{3}|20[0-9]{2})\b)\s*\)',
         head
-    )
-    if range_m:
-        birth_year = range_m.group(1)
-        death_year = range_m.group(2)
+    ):
+        candidates_yr.append((int(m.group(1)), m.group(1), m.group(2)))
+
+    if candidates_yr:
+        # Pick the candidate with the earliest first year (= birth year)
+        best = min(candidates_yr, key=lambda t: t[0])
+        birth_year = best[1]
+        death_year = best[2]
         return birth_year, death_year
 
     # 3. Use API year for the known event
@@ -391,27 +488,75 @@ _SECONDARY_SIGNALS = {
         r'\bself-taught\b', r'\bdropout\b', r'\baccidental\w*\b',
         r'\bby chance\b', r'\bgarage\b', r'\bno formal\b',
         r'\bwithout training\b', r'\bhumble origin\b',
+        r'\bno experience\b', r'\bnever.*before\b',
+        r'\btaught himself\b', r'\btaught herself\b',
     ],
     "defiance": [
         r'\brefused\b', r'\bdefied\b', r'\bresist\w+\b',
         r'\bfirst woman\b', r'\bfirst black\b', r'\bfirst african\b',
         r'\bfirst person\b', r'\bpersist\w+\b', r'\bcourage\b',
-        r'\bbroke\b', r'\bbarrier\b',
+        r'\bbroke\b', r'\bbarrier\b', r'\btrailblaz\w+\b',
+        r'\bpioneer\w*\b', r'\bpaved the way\b',
     ],
     "heretic": [
         r'\bdismiss\w+\b', r'\bscoff\w+\b', r'\bvindicat\w+\b',
         r'\bproved.*wrong\b', r'\bskeptic\w*\b', r'\bcontroversi\w+\b',
         r'\bunconventional\b', r'\bmocked\b', r'\bridiculed\b',
+        r'\bno one believed\b', r'\bcalled.*crazy\b', r'\bcalled.*mad\b',
+        r'\bblasphemy\b', r'\bheresy\b',
     ],
     "humanising": [
         r'\bfeared\b', r'\bcried\b', r'\blaughed\b', r'\bfamily\b',
         r'\bfriend\w*\b', r'\bhumble\b', r'\bmodest\b', r'\bquiet\w*\b',
         r'\bshy\b', r'\bloved\b', r'\bdevoted\b',
+        r'\bnever told\b', r'\bkept quiet\b', r'\bkept secret\b',
     ],
     "irony": [
         r'\bironical?ly?\b', r'\bparadox\b', r'\bunexpected\b',
         r'\btwist\b', r'\bdespite\b', r'\bnevertheless\b',
         r'\bcuriously\b', r'\bof all people\b',
+        r'\bturned out\b', r'\bwho knew\b', r'\blittle did\b',
+        r'\bfailed.*became\b', r'\baccident.*led\b',
+    ],
+    # --- NEW signal categories informed by user's editorial taste ---
+    "direct_quote": [
+        r'"[^"]{15,}"', r'\u201c[^\u201d]{15,}\u201d',
+        r'\bhe (?:said|told|recalled|wrote)\b',
+        r'\bshe (?:said|told|recalled|wrote)\b',
+        r'\b(?:he|she) later (?:said|told|recalled|wrote)\b',
+        r'\b(?:he|she) once (?:said|told)\b',
+        r'\bas (?:he|she) put it\b',
+        r'\bin (?:an|a) interview\b',
+    ],
+    "chance_encounter": [
+        r'\boverheard\b', r'\bhappened to\b', r'\bby chance\b',
+        r'\bchance (?:meeting|encounter)\b', r'\bwrong turn\b',
+        r'\bone day\b', r'\bstumbl\w+\b', r'\baccident\w*\b',
+        r'\bsaw an ad\b', r'\bfortuit\w+\b', r'\bserendipit\w+\b',
+        r'\bcoincidence\b', r'\bstroke of luck\b',
+    ],
+    "late_bloom": [
+        r'\btoiled in obscurity\b', r'\bdiscovered in (?:her|his)\b',
+        r'\blong.delayed\b', r'\bafter retir\w+\b', r'\blate start\b',
+        r'\bfinally\b', r'\bin (?:her|his) [5-9]0s\b',
+        r'\bin (?:her|his) 80s\b', r'\bfor decades?\b',
+        r'\bafter (?:\d+ )?years\b', r'\bwaited\b',
+        r'\bnever.*recogni[sz]\w+\b', r'\blong.*before\b',
+    ],
+    "origin_story": [
+        r'\bgrew up\b', r'\bhumble\b', r'\bgarage\b', r'\bfactory\b',
+        r'\bbasement\b', r'\bworkshop\b', r'\bfirst job\b',
+        r'\bchildhood\b', r'\bfather.*told\b', r'\bmother.*told\b',
+        r'\bfather.*wanted\b', r'\bmother.*wanted\b',
+        r'\bbefore.*famous\b', r'\bbefore.*career\b',
+        r'\bworking.class\b', r'\bpoverty\b', r'\bghetto\b',
+    ],
+    "vivid_detail": [
+        r'\bevery day\b', r'\balways carried\b', r'\bnever miss\w+\b',
+        r'\britual\b', r'\bcoffin\b', r'\bnude\b', r'\bhid\w*\b',
+        r'\bdisguis\w+\b', r'\bsmuggl\w+\b', r'\bpocket\w*\b',
+        r'\bcollect\w+\b', r'\bobsess\w+\b', r'\bmeticulou\w+\b',
+        r'\bsecret\w*\b', r'\bhiding\b',
     ],
 }
 
@@ -483,8 +628,9 @@ def clean_tagline(api_description: str, extract: str) -> str:
     # Strip redundant year patterns (they appear in the header already)
     desc = re.sub(r'\(\s*\d{4}\s*[–\-]\s*\d{4}\s*\)', '', desc)
     desc = re.sub(r'\b(?:born|died)\b\s+\d{4}\b', '', desc, flags=re.IGNORECASE)
-    desc = re.sub(r'\s{2,}', ' ', desc).strip()
-    # Clean trailing space before punctuation
+    # Remove empty parentheticals left behind, e.g. "()" or "( )"
+    desc = re.sub(r'\(\s*\)', '', desc)
+    # Clean up whitespace artefacts
     desc = re.sub(r'\s+\.', '.', desc)
     desc = re.sub(r'\s{2,}', ' ', desc).strip()
     if desc and not desc.endswith("."):
@@ -706,6 +852,388 @@ def has_rich_anecdote(candidate: dict) -> bool:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Step 4b — Obituary Digest (v9)
+#   Fetches recent obituaries from NYT + Guardian RSS feeds,
+#   resolves archive URLs, scores, selects 2 per publication,
+#   and generates copyright-safe 2-3 sentence teasers.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_OBITUARY_RSS_FEEDS = {
+    "NYT": "https://rss.nytimes.com/services/xml/rss/nyt/Obituaries.xml",
+    "Guardian": "https://www.theguardian.com/tone/obituaries/rss",
+}
+
+
+def _fetch_rss(url: str) -> list:
+    """Fetch and parse an RSS feed. Returns list of item dicts."""
+    items = []
+    try:
+        req = urllib.request.Request(url, headers=HEADERS)
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            xml_bytes = resp.read()
+        root = ET.fromstring(xml_bytes)
+
+        for item in root.findall(".//item"):
+            title    = (item.findtext("title") or "").strip()
+            link     = (item.findtext("link") or "").strip()
+            desc     = (item.findtext("description") or "").strip()
+            pub_date = (item.findtext("pubDate") or "").strip()
+
+            if not title or not link:
+                continue
+
+            # Parse publication date (RFC 822)
+            pub_dt = None
+            if pub_date:
+                try:
+                    pub_dt = parsedate_to_datetime(pub_date).date()
+                except Exception:
+                    pass
+
+            items.append({
+                "title":    title,
+                "link":     link,
+                "desc":     desc,
+                "pub_date": pub_dt,
+            })
+    except Exception as exc:
+        log.warning("Failed to fetch RSS %s: %s", url, exc)
+
+    return items
+
+
+def _strip_html_tags(html: str) -> str:
+    """Basic HTML→text conversion for article extraction."""
+    text = re.sub(r'<(script|style|noscript)[^>]*>.*?</\1>', '', html,
+                  flags=re.DOTALL | re.IGNORECASE)
+    paragraphs = re.findall(r'<p[^>]*>(.*?)</p>', html, flags=re.DOTALL)
+    if paragraphs:
+        text = " ".join(paragraphs)
+    text = re.sub(r'<[^>]+>', ' ', text)
+    text = text.replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>')
+    text = text.replace('&quot;', '"').replace('&#39;', "'").replace('&nbsp;', ' ')
+    text = re.sub(r'&\w+;', '', text)
+    return re.sub(r'\s+', ' ', text).strip()
+
+
+def _resolve_archive_url(original_url: str) -> tuple:
+    """
+    Try archive.ph → Wayback Machine → original URL.
+    Returns (best_url, article_text).
+    """
+    # 1. archive.ph
+    try:
+        archive_url = f"https://archive.ph/newest/{original_url}"
+        req = urllib.request.Request(archive_url, headers=HEADERS)
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            final_url = resp.url
+            if "archive.ph/" in final_url:
+                html = resp.read().decode("utf-8", errors="replace")
+                return final_url, _strip_html_tags(html)
+    except Exception:
+        pass
+
+    # 2. Wayback Machine availability API
+    try:
+        wb_api = (
+            "https://archive.org/wayback/available?url="
+            + urllib.parse.quote(original_url, safe="")
+        )
+        data = http_get_json(wb_api)
+        closest = data.get("archived_snapshots", {}).get("closest", {})
+        if closest.get("available"):
+            wb_url = closest["url"]
+            req = urllib.request.Request(wb_url, headers=HEADERS)
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                html = resp.read().decode("utf-8", errors="replace")
+                return wb_url, _strip_html_tags(html)
+    except Exception:
+        pass
+
+    # 3. Original URL (Guardian often not paywalled)
+    try:
+        req = urllib.request.Request(original_url, headers=HEADERS)
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            html = resp.read().decode("utf-8", errors="replace")
+            return original_url, _strip_html_tags(html)
+    except Exception:
+        pass
+
+    return original_url, ""
+
+
+def _score_obituary_text(text: str) -> dict:
+    """Score obituary text using the same editorial signal patterns."""
+    if not text or len(text) < 200:
+        return {"primary": 0, "secondary": 0, "total": 0, "signals": []}
+
+    text_lower = text.lower()
+    primary = secondary = 0
+    signals = []
+
+    for criterion, patterns in _PRIMARY_SIGNALS.items():
+        hits = sum(1 for p in patterns if re.search(p, text_lower))
+        if hits >= 3:   # slightly lower threshold for shorter texts
+            primary += 1
+            signals.append(criterion)
+
+    for criterion, patterns in _SECONDARY_SIGNALS.items():
+        hits = sum(1 for p in patterns if re.search(p, text_lower))
+        if hits >= 2:
+            secondary += 1
+            signals.append(criterion)
+
+    return {
+        "primary":   primary,
+        "secondary": secondary,
+        "total":     primary * 10 + secondary * 2 + random.uniform(0, 2),
+        "signals":   signals,
+    }
+
+
+def _extract_teaser(text: str, signals: list) -> str:
+    """
+    Extract 5-6 of the most interesting sentences from an obituary,
+    drawn from across the article for a factual summary feel.
+    Heavily favours sentences containing direct quotes and vivid details,
+    matching the user's editorial preference for "the voice of the person".
+    """
+    if not text:
+        return ""
+
+    all_sigs = {**_PRIMARY_SIGNALS, **_SECONDARY_SIGNALS}
+    patterns = []
+    for sig in signals:
+        patterns.extend(all_sigs.get(sig, []))
+    if not patterns:
+        for pats in _SECONDARY_SIGNALS.values():
+            patterns.extend(pats)
+
+    sentences = [
+        s.strip() for s in re.split(r'(?<=[.!?])\s+', text)
+        if 40 < len(s.strip()) < 400
+    ]
+    if not sentences:
+        return text[:500].strip()
+
+    scored = []
+    for i, sent in enumerate(sentences):
+        hits = sum(1 for p in patterns if re.search(p, sent.lower()))
+
+        # --- QUOTE BONUS: user's highlights overwhelmingly feature direct quotes ---
+        has_quote = bool(re.search(r'["\u201c][^"\u201d]{15,}["\u201d]', sent))
+        has_speech = bool(re.search(
+            r'\b(?:he|she)\s+(?:said|told|recalled|wrote|added|continued)\b',
+            sent, re.IGNORECASE
+        ))
+        quote_bonus = 0.0
+        if has_quote:
+            quote_bonus += 2.0      # Strong boost for direct quoted speech
+        if has_speech:
+            quote_bonus += 1.0      # Boost for speech attribution
+
+        # --- VIVID DETAIL BONUS: eccentric / concrete personal detail ---
+        vivid_pats = _SECONDARY_SIGNALS.get("vivid_detail", [])
+        vivid_hits = sum(1 for p in vivid_pats if re.search(p, sent.lower()))
+        vivid_bonus = min(vivid_hits * 0.5, 1.5)
+
+        # --- ORIGIN STORY BONUS: humble beginnings, family context ---
+        origin_pats = _SECONDARY_SIGNALS.get("origin_story", [])
+        origin_hits = sum(1 for p in origin_pats if re.search(p, sent.lower()))
+        origin_bonus = min(origin_hits * 0.3, 0.9)
+
+        # Slight preference for earlier sentences (more context)
+        pos_bonus = 0.3 if i < len(sentences) * 0.4 else 0.0
+
+        total = hits + quote_bonus + vivid_bonus + origin_bonus + pos_bonus
+        scored.append((total, i, sent))
+
+    scored.sort(key=lambda x: (-x[0], x[1]))
+
+    # Take top 6 sentences, re-ordered by their original position
+    # so the teaser reads coherently
+    top_indices = sorted([s[1] for s in scored[:6]])
+    picked = [sentences[i] for i in top_indices]
+
+    return " ".join(picked)
+
+
+def _extract_obit_years(title: str, desc: str, text: str) -> tuple:
+    """Extract birth and death years from obituary title/text."""
+    combined = f"{title} {desc} {text[:500]}"
+
+    # Pattern: "Name, 85, Dies" or "who died aged 85"
+    age_m = re.search(r'\b(\d{2,3})\b[,.]?\s*(?:dies|dead|has died|who died)',
+                      combined, re.IGNORECASE)
+
+    # Direct year patterns
+    death_m = re.search(r'\b(202[0-9])\b', combined)
+    birth_m = re.search(
+        r'(?:born|b\.)\s*(?:in\s+)?(\b(?:19|20)\d{2}\b)',
+        combined, re.IGNORECASE
+    )
+
+    death_year = death_m.group(1) if death_m else "2026"
+    birth_year = birth_m.group(1) if birth_m else "?"
+
+    # If we have age + death year but no birth year, compute it
+    if birth_year == "?" and age_m:
+        try:
+            age = int(age_m.group(1))
+            dy  = int(death_year)
+            birth_year = str(dy - age)
+        except ValueError:
+            pass
+
+    return birth_year, death_year
+
+
+def _extract_obit_tagline(title: str, desc: str) -> str:
+    """Build a clean one-sentence tagline from the RSS title/description."""
+    # Guardian titles often include "Obituary" suffix — strip it
+    tag = desc if len(desc) > 30 else title
+    tag = re.sub(r'\s*[–\-|]\s*obituar\w*\s*$', '', tag, flags=re.IGNORECASE)
+    tag = re.sub(r'\s*obituar\w*:?\s*', '', tag, flags=re.IGNORECASE)
+    tag = re.sub(r'\s+', ' ', tag).strip()
+    # Strip HTML tags from RSS description
+    tag = re.sub(r'<[^>]+>', '', tag).strip()
+    # Limit to first sentence
+    sentences = re.split(r'(?<=[.!?])\s+', tag)
+    tag = sentences[0] if sentences else tag
+    if tag and not tag.endswith("."):
+        tag += "."
+    return tag[:250]
+
+
+def fetch_obituaries() -> list:
+    """
+    Fetch recent obituaries from NYT and Guardian RSS feeds.
+    Returns list of scored obituary candidates.
+    """
+    today = datetime.date.today()
+    cutoff = today - datetime.timedelta(days=7)
+
+    all_obits = []
+
+    for source, rss_url in _OBITUARY_RSS_FEEDS.items():
+        log.info("Fetching %s obituary RSS…", source)
+        items = _fetch_rss(rss_url)
+        log.info("%s RSS: %d items", source, len(items))
+
+        # Filter to past 7 days
+        recent = [
+            it for it in items
+            if it["pub_date"] is None or it["pub_date"] >= cutoff
+        ]
+        log.info("%s recent (past 7 days): %d", source, len(recent))
+
+        # Quick-score based on RSS description to pre-filter
+        for item in recent:
+            item["source"]  = source
+            item["_quick"]  = _score_obituary_text(item["desc"])
+        recent.sort(key=lambda x: -x["_quick"]["total"])
+
+        # Take top 8 per source for deeper processing
+        top_n = recent[:8]
+
+        for item in top_n:
+            log.info("Resolving archive for: %s", item["title"])
+            archive_url, article_text = _resolve_archive_url(item["link"])
+            item["archive_url"]  = archive_url
+            item["article_text"] = article_text
+
+            # Full-text scoring (falls back to description if fetch failed)
+            scoring_text = article_text if len(article_text) > 200 else item["desc"]
+            item["score"]   = _score_obituary_text(scoring_text)
+            item["signals"] = item["score"]["signals"]
+
+            # Extract teaser and metadata
+            item["teaser"]  = _extract_teaser(
+                article_text if article_text else item["desc"],
+                item["signals"]
+            )
+            birth_yr, death_yr = _extract_obit_years(
+                item["title"], item["desc"], article_text
+            )
+            item["birth_year"] = birth_yr
+            item["death_year"] = death_yr
+            item["tagline"]    = _extract_obit_tagline(item["title"], item["desc"])
+
+            # Extract person name from title (strip "dies at 85" etc.)
+            name = re.sub(
+                r'\s*[,:].*(?:dies?|dead|obituary|has died).*$', '',
+                item["title"], flags=re.IGNORECASE
+            ).strip()
+            name = re.sub(r'\s*obituary\s*$', '', name, flags=re.IGNORECASE).strip()
+            item["name"] = name if name else item["title"]
+
+            all_obits.append(item)
+            time.sleep(1.0)  # Be polite to archive services
+
+    return all_obits
+
+
+def select_obituaries(candidates: list) -> list:
+    """Select 2 from NYT and 2 from Guardian, best-scored."""
+    nyt = sorted(
+        [c for c in candidates if c["source"] == "NYT"],
+        key=lambda x: -x["score"]["total"]
+    )
+    guardian = sorted(
+        [c for c in candidates if c["source"] == "Guardian"],
+        key=lambda x: -x["score"]["total"]
+    )
+    selected = nyt[:2] + guardian[:2]
+    log.info("Selected obituaries: %s",
+             [(o["name"], o["source"]) for o in selected])
+    return selected
+
+
+_OBIT_TAG = (
+    "display:inline-block;background:#fdf2e9;color:#8b5e3c;"
+    "border-radius:5px;font-size:11px;font-weight:600;"
+    "padding:3px 9px;margin:2px 3px 2px 0;letter-spacing:.04em;"
+)
+
+
+def _obituary_card(o: dict) -> str:
+    """Generate a single obituary HTML card."""
+    birth = o.get("birth_year", "?")
+    death = o.get("death_year", "?")
+    years = f"({birth}–{death})" if birth != "?" else ""
+    source_label = "The New York Times" if o["source"] == "NYT" else "The Guardian"
+
+    tags = "".join(
+        f'<span style="{_OBIT_TAG}">{SIGNAL_LABELS.get(s, s)}</span>'
+        for s in o.get("signals", [])[:3]
+    )
+    tags_block = f'<div style="margin-top:13px;">{tags}</div>' if tags else ""
+
+    teaser = o.get("teaser", "")
+
+    return f"""
+    <div style="background:#ffffff;border:1px solid #e5ddd4;border-radius:12px;
+                padding:24px 26px 20px;margin-bottom:24px;">
+      <p style="font-size:11px;font-weight:600;color:#8b5e3c;text-transform:uppercase;
+                letter-spacing:.09em;margin:0 0 7px;">{source_label}</p>
+      <div style="margin-bottom:4px;">
+        <span style="font-size:20px;font-weight:700;color:#1a1a1a;">{o['name']}</span>
+        <span style="font-size:13px;color:#6b7280;margin-left:8px;">{years}</span>
+        <p style="font-size:14px;color:#555;font-style:italic;margin:6px 0 0;">{o['tagline']}</p>
+      </div>
+      <p style="font-size:11px;font-weight:700;color:#8b5e3c;letter-spacing:.1em;
+                text-transform:uppercase;margin:16px 0 7px;">The Anecdote</p>
+      <p style="font-size:15px;line-height:1.78;color:#2d2d2d;margin:0;">{teaser}</p>
+      {tags_block}
+      <a href="{o['archive_url']}"
+         style="display:inline-block;margin-top:18px;font-size:14px;
+                color:#2563eb;text-decoration:none;font-weight:500;">
+        Read the full obituary &rarr;
+      </a>
+    </div>"""
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Step 5 — Select 4 with era AND field/nationality diversity
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -804,15 +1332,21 @@ def select_four(ranked: list) -> list:
 # ─────────────────────────────────────────────────────────────────────────────
 
 SIGNAL_LABELS = {
-    "watercooler":  "Watercooler Anecdote",
-    "mental_model": "Eccentric Mental Model",
-    "last_of_kind": "Last of a Kind",
-    "underdog":     "Underdog / Overlooked",
-    "diy":          "Hidden Origin / DIY",
-    "defiance":     "Strategic Defiance",
-    "heretic":      "Scientific Heretic",
-    "humanising":   "Humanising Contrast",
-    "irony":        "Narrative Irony",
+    "watercooler":       "Watercooler Anecdote",
+    "mental_model":      "Eccentric Mental Model",
+    "last_of_kind":      "Last of a Kind",
+    "underdog":          "Underdog / Overlooked",
+    "diy":               "Hidden Origin / DIY",
+    "defiance":          "Strategic Defiance",
+    "heretic":           "Scientific Heretic",
+    "humanising":        "Humanising Contrast",
+    "irony":             "Narrative Irony",
+    # New labels (v9.1)
+    "direct_quote":      "Voice of the Person",
+    "chance_encounter":  "Pivotal Chance Moment",
+    "late_bloom":        "Late Discovery",
+    "origin_story":      "Origin Story",
+    "vivid_detail":      "Vivid Personal Detail",
 }
 
 _TAG = (
@@ -885,8 +1419,24 @@ def _card(p: dict) -> str:
     </div>"""
 
 
-def build_email_html(people: list, date_display: str) -> str:
+def build_email_html(people: list, date_display: str,
+                     obituaries: list = None) -> str:
     cards = "".join(_card(p) for p in people)
+
+    # v9: Obituary section (optional)
+    obit_section = ""
+    if obituaries:
+        obit_cards = "".join(_obituary_card(o) for o in obituaries)
+        obit_section = f"""
+    <div style="text-align:center;border-bottom:2px solid #e5e0d8;border-top:2px solid #e5e0d8;
+                padding:24px 0;margin:32px 0;">
+      <h2 style="font-size:22px;font-weight:700;color:#8b5e3c;margin:0;line-height:1.2;">
+        Obituary Digest</h2>
+      <p style="font-size:13px;color:#6b7280;margin:8px 0 0;">
+        Notable lives remembered this week &mdash; from The New York Times &amp; The Guardian</p>
+    </div>
+    {obit_cards}"""
+
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -907,9 +1457,10 @@ def build_email_html(people: list, date_display: str) -> str:
         {date_display} &mdash; Four lives worth knowing about</p>
     </div>
     {cards}
+    {obit_section}
     <p style="text-align:center;font-size:12px;color:#9ca3af;
               margin-top:12px;border-top:1px solid #e5e0d8;padding-top:20px;">
-      Generated automatically &bull; Source: Wikipedia &bull; {date_display}
+      Generated automatically &bull; Sources: Wikipedia, NYT, The Guardian &bull; {date_display}
     </p>
   </div>
 </body>
@@ -954,15 +1505,41 @@ def main():
     date_display = today.strftime("%-d %B %Y")
     date_str     = today.strftime("%Y-%m-%d")
 
-    log.info("=== Wikipedia Biographical Digest v8 starting for %s ===", date_str)
+    log.info("=== Wikipedia Biographical Digest v9.2 starting for %s ===", date_str)
+
+    # ── v9.2: Load seen-items registry so we never repeat a bio or obituary ──
+    seen = load_seen()
+    seen_wiki_titles = {e["title"] for e in seen.get("wikipedia", [])}
+    seen_obit_urls   = {e["url"]   for e in seen.get("obituaries", [])}
+    log.info(
+        "Seen filter active — blocking %d Wikipedia titles, %d obituary URLs",
+        len(seen_wiki_titles), len(seen_obit_urls),
+    )
 
     candidates = fetch_candidates(month_name, month_num, day_padded)
     if not candidates:
         log.error("No person candidates found. Aborting.")
         sys.exit(1)
 
+    # Filter out previously-seen Wikipedia bios
+    fresh_candidates = [c for c in candidates if c["title"] not in seen_wiki_titles]
+    skipped_count    = len(candidates) - len(fresh_candidates)
+    log.info(
+        "Candidates: %d total, %d already seen (skipped), %d fresh",
+        len(candidates), skipped_count, len(fresh_candidates),
+    )
+
+    # Safety net: if filtering removed too many, fall back to full pool
+    # (this prevents the digest failing on dates with very few entries)
+    if len(fresh_candidates) < 4:
+        log.warning(
+            "Only %d fresh candidates after seen-filter — relaxing filter for this run.",
+            len(fresh_candidates),
+        )
+        fresh_candidates = candidates   # use full pool this run
+
     scored = []
-    for candidate in candidates:
+    for candidate in fresh_candidates:
         title = candidate["title"]
         log.info("Fetching biography: %s", title)
         extract = get_biography(title)
@@ -1002,9 +1579,13 @@ def main():
         sys.exit(1)
 
     log.info("Scored %d biographies", len(scored))
-    ranked = sorted(scored, key=lambda x: -x["score"]["total"])
 
-    # v8: Prefer candidates with rich personal anecdotes; defer dry ones
+    # Light randomisation so repeated runs on the same date vary.
+    for p in scored:
+        p["_rand_score"] = p["score"]["total"] + random.uniform(0, 3)
+    ranked = sorted(scored, key=lambda x: -x["_rand_score"])
+
+    # Prefer candidates with rich personal anecdotes; defer dry ones
     rich_pool = [p for p in ranked if has_rich_anecdote(p)]
     dry_pool  = [p for p in ranked if not has_rich_anecdote(p)]
     log.info(
@@ -1012,15 +1593,51 @@ def main():
         len(rich_pool), len(dry_pool)
     )
 
-    # Rich candidates ranked first; dry ones fill any remaining slots
     ordered  = rich_pool + dry_pool
     selected = select_four(ordered)
     log.info("Selected: %s", [p["name"] for p in selected])
 
-    html    = build_email_html(selected, date_display)
+    # ── Obituary section (fault-tolerant) ────────────────────────────────
+    obituaries = []
+    try:
+        log.info("=== Obituary Digest starting ===")
+        obit_candidates = fetch_obituaries()
+
+        # Filter out previously-seen obituary URLs
+        fresh_obits = [
+            o for o in obit_candidates
+            if o.get("link", o.get("archive_url", "")) not in seen_obit_urls
+        ]
+        skipped_obits = len(obit_candidates) - len(fresh_obits)
+        log.info(
+            "Obituary candidates: %d total, %d already seen, %d fresh",
+            len(obit_candidates), skipped_obits, len(fresh_obits),
+        )
+
+        if fresh_obits:
+            obituaries = select_obituaries(fresh_obits)
+            log.info("Obituary section: %d entries selected", len(obituaries))
+        else:
+            log.warning("No fresh obituary candidates after seen-filter; skipping section")
+    except Exception as exc:
+        log.error("Obituary section failed (non-fatal): %s", exc)
+        obituaries = []
+
+    html    = build_email_html(selected, date_display,
+                               obituaries=obituaries if obituaries else None)
     subject = f"Wikipedia Biographical Digest — {date_display}"
     send_email(subject, html)
-    print(f"Done. Digest sent for {date_display}.")
+
+    # ── v9.2: Persist what we sent so it won't recur ─────────────────────
+    new_wiki  = [p["title"] for p in selected]
+    new_obits = [
+        (o.get("link", o.get("archive_url", "")), o.get("name", ""))
+        for o in obituaries
+    ]
+    save_seen(seen, new_wiki, new_obits)
+
+    obit_note = f" + {len(obituaries)} obituaries" if obituaries else ""
+    print(f"Done. Digest sent for {date_display}{obit_note}.")
 
 
 if __name__ == "__main__":
