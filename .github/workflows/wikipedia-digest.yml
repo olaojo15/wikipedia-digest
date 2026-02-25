@@ -1,9 +1,15 @@
 name: Wikipedia Biographical Digest
 
 on:
+  # Runs every day at 21:00 UTC
   schedule:
     - cron: "0 21 * * *"
+  # Allow manual triggering from the Actions tab
   workflow_dispatch:
+
+# v9.2: needs write permission so we can commit seen_items.json back
+permissions:
+  contents: write
 
 jobs:
   send-digest:
@@ -12,15 +18,29 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          # Fetch full history so git push works cleanly
+          fetch-depth: 1
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.11"
 
-      - name: Run Wikipedia Biographical Digest
+      - name: Run digest script
         env:
           GMAIL_EMAIL:        ${{ secrets.GMAIL_EMAIL }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           DIGEST_RECIPIENT:   ${{ secrets.DIGEST_RECIPIENT }}
         run: python wikipedia_digest_email.py
+
+      # v9.2: Commit seen_items.json back to the repo so future runs
+      # know which bios and obituaries have already been sent.
+      - name: Commit seen_items.json
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add seen_items.json
+          # Only commit if the file changed (first run will always change it)
+          git diff --cached --quiet || git commit -m "chore: update seen_items.json [skip ci]"
+          git push
