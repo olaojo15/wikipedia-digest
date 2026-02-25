@@ -15,6 +15,22 @@
     {
       "title": "Mark_Rothko",
       "date": "2026-02-25"
+    },
+    {
+      "title": "George_Harrison",
+      "date": "2026-02-25"
+    },
+    {
+      "title": "John_McGraw",
+      "date": "2026-02-25"
+    },
+    {
+      "title": "Enrico_Caruso",
+      "date": "2026-02-25"
+    },
+    {
+      "title": "Christopher_Wren",
+      "date": "2026-02-25"
     }
   ],
   "obituaries": [
@@ -36,6 +52,26 @@
     {
       "url": "https://www.theguardian.com/film/2026/feb/24/tom-noonan-obituary",
       "name": "Tom Noonan",
+      "date": "2026-02-25"
+    },
+    {
+      "url": "https://www.nytimes.com/2026/02/25/arts/television/lauren-chapin-dead.html",
+      "name": "Lauren Chapin",
+      "date": "2026-02-25"
+    },
+    {
+      "url": "https://www.nytimes.com/2026/02/23/health/leah-stavenhagen-als.html",
+      "name": "Leah Stavenhagen",
+      "date": "2026-02-25"
+    },
+    {
+      "url": "https://www.theguardian.com/media/2026/feb/22/chris-boffey-obituary",
+      "name": "Chris Boffey",
+      "date": "2026-02-25"
+    },
+    {
+      "url": "https://www.theguardian.com/books/2026/feb/25/cees-nooteboom-obituary",
+      "name": "Cees Nooteboom",
       "date": "2026-02-25"
     }
   ]
