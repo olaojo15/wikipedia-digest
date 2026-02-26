@@ -31,6 +31,22 @@
     {
       "title": "Christopher_Wren",
       "date": "2026-02-25"
+    },
+    {
+      "title": "Recep_Tayyip_Erdoğan",
+      "date": "2026-02-26"
+    },
+    {
+      "title": "Buffalo_Bill",
+      "date": "2026-02-26"
+    },
+    {
+      "title": "Ferdinand_I_of_Bulgaria",
+      "date": "2026-02-26"
+    },
+    {
+      "title": "Orde_Wingate",
+      "date": "2026-02-26"
     }
   ],
   "obituaries": [
@@ -73,6 +89,26 @@
       "url": "https://www.theguardian.com/books/2026/feb/25/cees-nooteboom-obituary",
       "name": "Cees Nooteboom",
       "date": "2026-02-25"
+    },
+    {
+      "url": "https://www.nytimes.com/2026/02/26/books/rose-lesniak-dead.html",
+      "name": "Rose Lesniak",
+      "date": "2026-02-26"
+    },
+    {
+      "url": "https://www.nytimes.com/2026/02/26/obituaries/jeff-galloway-dead.html",
+      "name": "Jeff Galloway",
+      "date": "2026-02-26"
+    },
+    {
+      "url": "https://www.theguardian.com/culture/2026/feb/23/philippe-gaulier-obituary",
+      "name": "Philippe Gaulier",
+      "date": "2026-02-26"
+    },
+    {
+      "url": "https://www.theguardian.com/stage/2026/feb/24/matz-skoog-obituary",
+      "name": "Matz Skoog",
+      "date": "2026-02-26"
     }
   ]
 }
