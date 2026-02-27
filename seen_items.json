@@ -47,6 +47,22 @@
     {
       "title": "Orde_Wingate",
       "date": "2026-02-26"
+    },
+    {
+      "title": "Constantine_the_Great",
+      "date": "2026-02-27"
+    },
+    {
+      "title": "Elizabeth_Taylor",
+      "date": "2026-02-27"
+    },
+    {
+      "title": "Roger_Scruton",
+      "date": "2026-02-27"
+    },
+    {
+      "title": "William_F._Buckley_Jr.",
+      "date": "2026-02-27"
     }
   ],
   "obituaries": [
@@ -109,6 +125,26 @@
       "url": "https://www.theguardian.com/stage/2026/feb/24/matz-skoog-obituary",
       "name": "Matz Skoog",
       "date": "2026-02-26"
+    },
+    {
+      "url": "https://www.nytimes.com/2026/02/26/us/joanne-bland-dead.html",
+      "name": "Jo Ann Bland",
+      "date": "2026-02-27"
+    },
+    {
+      "url": "https://www.nytimes.com/2026/02/26/arts/design/jean-widmer-dead.html",
+      "name": "Jean Widmer",
+      "date": "2026-02-27"
+    },
+    {
+      "url": "https://www.theguardian.com/artanddesign/2026/feb/27/dora-maurer-obituary",
+      "name": "Dóra Maurer",
+      "date": "2026-02-27"
+    },
+    {
+      "url": "https://www.theguardian.com/society/2026/feb/25/jean-wilson-obituary",
+      "name": "Jean Wilson",
+      "date": "2026-02-27"
     }
   ]
 }
