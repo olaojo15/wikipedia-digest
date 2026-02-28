@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Wikipedia Biographical Digest + Obituary Digest — v9.4
+Wikipedia Biographical Digest + Obituary Digest — v9.5
 
 Sections:
   1. Wikipedia On This Day — 4 biographical entries with labelled snippets
@@ -57,6 +57,19 @@ v9.4 changes — narrative teaser quality and NYT link fix:
     giving the flowing editorial feel the user demonstrated with Jean Wilson's obit
   - NYT archive_url is always forced to https://archive.ph/newest/{nyt_url},
     ensuring the "Read the full obituary" link bypasses the paywall for the reader
+
+v9.5 changes — duplicate content, nav boilerplate, tagline quality:
+  - _is_nav_boilerplate() filter added: Guardian (and NYT) pages often include
+    the full site navigation inside <p> tags; paragraphs matching navigation
+    markers (Skip to navigation, US/UK edition, Back to home, etc.) or with
+    very low sentence-punctuation density are dropped before teaser extraction
+  - NYT duplicate-content guard: when the teaser is identical to the tagline
+    (both sourced from the same thin og:description/RSS text), The Anecdote
+    block is replaced with "Full article available via the link below" rather
+    than repeating the same sentence twice
+  - Tagline sentence splitter now handles run-together sentences ("arts.Jan")
+    with no whitespace between them, not just "sentence. Sentence" form;
+    character limit increased slightly to 280 to avoid mid-word truncation
 """
 
 import sys
@@ -1003,6 +1016,54 @@ def _fetch_rss(url: str) -> list:
     return items
 
 
+# v9.5: Patterns that identify site navigation / boilerplate paragraphs
+# that should be excluded from article text. Applies to both Guardian and NYT.
+_NAV_BOILERPLATE_PATTERNS = [
+    r'skip to (?:navigation|content|main)',
+    r'\bback to home\b',
+    r'\bUS edition\b.*\bUK edition\b',
+    r'\bUK edition\b.*\bAustralia edition\b',
+    r'sign in\b.{0,80}\bnewsletters?\b',
+    r'\bnewsletters?\b.{0,80}\bsign in\b',
+    r'news\s+opinion\s+sport\s+culture',
+    r'sport\s+culture\s+lifestyle',
+    r'close dialogue',
+    r'toggle caption',
+    r'print subscriptions',
+    r'digital archive',
+    r'(?:previous|next) image',
+    # NYT nav markers
+    r'sections\s+search\s+skip',
+    r'the\s+new\s+york\s+times',         # only when in nav-length chunk
+    r'log in\s.{0,60}\bsubscribe\b',
+]
+
+
+def _is_nav_boilerplate(para: str) -> bool:
+    """
+    Return True if a paragraph looks like site navigation / boilerplate
+    rather than article prose.  Catches the Guardian's full site-menu
+    that sometimes appears inside <p> tags before the article body.
+    """
+    para_lower = para.lower()
+
+    # Short paragraphs can't be nav boilerplate (nav runs long)
+    # but we still check the specific short markers
+    for pattern in _NAV_BOILERPLATE_PATTERNS:
+        if re.search(pattern, para_lower):
+            return True
+
+    # Very long "paragraph" with almost no sentence endings = nav dump
+    if len(para) > 500:
+        sentence_ends = len(re.findall(r'[.!?]', para))
+        words = len(para.split())
+        # Fewer than 1 sentence-ending punctuation per 40 words → likely nav
+        if words > 0 and sentence_ends / words < 0.025:
+            return True
+
+    return False
+
+
 _JS_CONTAMINATION_PATTERNS = [
     # Arrow functions, method calls
     r'=>\s*\{',
@@ -1065,6 +1126,9 @@ def _strip_html_tags(html: str) -> str:
         for raw_para in paragraphs:
             para_text = _clean_html_chunk(raw_para)
             if not para_text:
+                continue
+            # v9.5: Drop entire nav/boilerplate paragraphs before further processing
+            if _is_nav_boilerplate(para_text):
                 continue
             # Filter JS-contaminated sentences within this paragraph
             sents = re.split(r'(?<=[.!?])\s+', para_text)
@@ -1340,12 +1404,13 @@ def _extract_obit_tagline(title: str, desc: str) -> str:
     tag = re.sub(r'\s+', ' ', tag).strip()
     # Strip HTML tags from RSS description
     tag = re.sub(r'<[^>]+>', '', tag).strip()
-    # Limit to first sentence
-    sentences = re.split(r'(?<=[.!?])\s+', tag)
-    tag = sentences[0] if sentences else tag
-    if tag and not tag.endswith("."):
+    # v9.5: Split on sentence boundary — handles both "sentence. Next" and
+    # "sentence.Next" (no space, as seen in truncated Guardian RSS descriptions)
+    sentences = re.split(r'(?<=[.!?])(?:\s+|(?=[A-Z]))', tag)
+    tag = sentences[0].strip() if sentences else tag
+    if tag and not tag.endswith((".", "!", "?")):
         tag += "."
-    return tag[:250]
+    return tag[:280]
 
 
 def fetch_obituaries() -> list:
@@ -1465,6 +1530,7 @@ def _obituary_card(o: dict) -> str:
     # v9.4: render multi-paragraph teasers as separate <p> blocks so the
     # narrative flows like a proper editorial piece rather than a run-on string.
     raw_teaser = o.get("teaser", "")
+    tagline    = o.get("tagline", "")
     _para_style = (
         'style="font-size:15px;line-height:1.78;color:#2d2d2d;'
         'margin:0 0 14px 0;"'
@@ -1472,15 +1538,36 @@ def _obituary_card(o: dict) -> str:
     _para_last_style = (
         'style="font-size:15px;line-height:1.78;color:#2d2d2d;margin:0;"'
     )
-    teaser_paras = [p.strip() for p in re.split(r'\n\n+', raw_teaser) if p.strip()]
-    if len(teaser_paras) > 1:
-        teaser_html = "".join(
-            f'<p {_para_style}>{p}</p>' if idx < len(teaser_paras) - 1
-            else f'<p {_para_last_style}>{p}</p>'
-            for idx, p in enumerate(teaser_paras)
+
+    # v9.5: Detect thin-content NYT entries where the "anecdote" is just the
+    # RSS synopsis repeated verbatim.  Compare normalised first 180 chars.
+    def _normalise(s: str) -> str:
+        return re.sub(r'\s+', ' ', s.strip().lower())[:180]
+
+    teaser_is_duplicate = (
+        bool(raw_teaser)
+        and bool(tagline)
+        and _normalise(raw_teaser) == _normalise(tagline)
+    )
+
+    if teaser_is_duplicate:
+        # Content is too thin to show an anecdote — direct the reader to the
+        # archive.ph URL where the full article is available.
+        anecdote_block = (
+            '<p style="font-size:14px;line-height:1.7;color:#6b7280;'
+            'font-style:italic;margin:0;">'
+            'Full article available via the link below.</p>'
         )
     else:
-        teaser_html = f'<p {_para_last_style}>{raw_teaser}</p>'
+        teaser_paras = [p.strip() for p in re.split(r'\n\n+', raw_teaser) if p.strip()]
+        if len(teaser_paras) > 1:
+            anecdote_block = "".join(
+                f'<p {_para_style}>{p}</p>' if idx < len(teaser_paras) - 1
+                else f'<p {_para_last_style}>{p}</p>'
+                for idx, p in enumerate(teaser_paras)
+            )
+        else:
+            anecdote_block = f'<p {_para_last_style}>{raw_teaser}</p>'
 
     return f"""
     <div style="background:#ffffff;border:1px solid #e5ddd4;border-radius:12px;
@@ -1490,11 +1577,11 @@ def _obituary_card(o: dict) -> str:
       <div style="margin-bottom:4px;">
         <span style="font-size:20px;font-weight:700;color:#1a1a1a;">{o['name']}</span>
         <span style="font-size:13px;color:#6b7280;margin-left:8px;">{years}</span>
-        <p style="font-size:14px;color:#555;font-style:italic;margin:6px 0 0;">{o['tagline']}</p>
+        <p style="font-size:14px;color:#555;font-style:italic;margin:6px 0 0;">{tagline}</p>
       </div>
       <p style="font-size:11px;font-weight:700;color:#8b5e3c;letter-spacing:.1em;
                 text-transform:uppercase;margin:16px 0 12px;">The Anecdote</p>
-      {teaser_html}
+      {anecdote_block}
       {tags_block}
       <a href="{o['archive_url']}"
          style="display:inline-block;margin-top:18px;font-size:14px;
