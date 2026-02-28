@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Wikipedia Biographical Digest + Obituary Digest — v9.6
+Wikipedia Biographical Digest + Obituary Digest — v9.6b
 
 Sections:
   1. Wikipedia On This Day — 4 biographical entries with labelled snippets
@@ -982,13 +982,25 @@ def has_rich_anecdote(candidate: dict) -> bool:
 #   and generates narrative paragraph teasers.
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Single confirmed URL per source — Guardian works reliably.
 _OBITUARY_RSS_FEEDS = {
-    # Guardian: full free access, rich narrative obituaries
     "Guardian": "https://www.theguardian.com/tone/obituaries/rss",
-    # AP News: free wire-service obituaries, worldwide coverage
-    # Primary feed URL; if this returns empty try /rss/tag/obituaries
-    "AP": "https://apnews.com/hub/obituaries.rss",
 }
+
+# v9.6b: AP News doesn't expose a stable obituaries RSS endpoint.
+# These URLs are tried in order; first one returning ≥1 item wins.
+_AP_RSS_CANDIDATES = [
+    "https://apnews.com/rss/obituaries",
+    "https://apnews.com/hub/obituaries/feed",
+    "https://apnews.com/hub/obituaries.rss",
+    "https://apnews.com/rss/tag/obituaries",
+    "https://feeds.apnews.com/rss/obituaries",
+]
+
+# If all AP News URLs fail, automatically use The Independent (UK) instead.
+# Free access, long-form narrative obituaries, reliable RSS.
+_OBITUARY_FALLBACK_SOURCE = "Independent"
+_OBITUARY_FALLBACK_FEED   = "https://www.independent.co.uk/topic/obituaries/rss"
 
 
 def _fetch_rss(url: str) -> list:
@@ -1027,6 +1039,29 @@ def _fetch_rss(url: str) -> list:
         log.warning("Failed to fetch RSS %s: %s", url, exc)
 
     return items
+
+
+def _fetch_ap_rss() -> tuple:
+    """
+    Try each URL in _AP_RSS_CANDIDATES until one returns items.
+    Returns (source_label, items).  Falls back to The Independent if all fail.
+    """
+    for url in _AP_RSS_CANDIDATES:
+        log.info("Trying AP News RSS: %s", url)
+        items = _fetch_rss(url)
+        if items:
+            log.info("AP News RSS succeeded: %s (%d items)", url, len(items))
+            return "AP", items
+        log.info("AP News RSS empty or failed: %s", url)
+
+    # All AP URLs failed — fall back to The Independent
+    log.warning(
+        "All AP News RSS URLs returned empty. "
+        "Falling back to %s: %s", _OBITUARY_FALLBACK_SOURCE, _OBITUARY_FALLBACK_FEED
+    )
+    items = _fetch_rss(_OBITUARY_FALLBACK_FEED)
+    log.info("%s RSS: %d items", _OBITUARY_FALLBACK_SOURCE, len(items))
+    return _OBITUARY_FALLBACK_SOURCE, items
 
 
 # v9.5: Patterns that identify site navigation / boilerplate paragraphs
@@ -1428,7 +1463,7 @@ def _extract_obit_tagline(title: str, desc: str) -> str:
 
 def fetch_obituaries() -> list:
     """
-    Fetch recent obituaries from NYT and Guardian RSS feeds.
+    Fetch recent obituaries from Guardian + AP News (or fallback to The Independent).
     Returns list of scored obituary candidates.
     """
     today = datetime.date.today()
@@ -1436,10 +1471,23 @@ def fetch_obituaries() -> list:
 
     all_obits = []
 
-    for source, rss_url in _OBITUARY_RSS_FEEDS.items():
-        log.info("Fetching %s obituary RSS…", source)
-        items = _fetch_rss(rss_url)
-        log.info("%s RSS: %d items", source, len(items))
+    # Build the feed list: confirmed sources from the dict, then AP (with fallback)
+    feeds_to_process = list(_OBITUARY_RSS_FEEDS.items())
+
+    # Fetch AP News (tries multiple URLs; falls back to The Independent automatically)
+    ap_source, ap_items = _fetch_ap_rss()
+    feeds_to_process.append((ap_source, None))   # items already fetched
+    _ap_items_cache = ap_items
+
+    for idx, (source, rss_url) in enumerate(feeds_to_process):
+        if rss_url is None:
+            # This is the pre-fetched AP / fallback batch
+            items = _ap_items_cache
+            log.info("%s: %d items (pre-fetched)", source, len(items))
+        else:
+            log.info("Fetching %s obituary RSS…", source)
+            items = _fetch_rss(rss_url)
+            log.info("%s RSS: %d items", source, len(items))
 
         # Filter to past 7 days
         recent = [
@@ -1500,18 +1548,20 @@ def fetch_obituaries() -> list:
 
 def select_obituaries(candidates: list) -> list:
     """
-    v9.6: Select 1 from Guardian + 1 from AP News, best-scored each.
+    v9.6: Select 1 from Guardian + 1 from AP News (or Independent fallback).
     Guardian is placed first (typically richer narrative content).
+    The second slot is whatever source _fetch_ap_rss() resolved to.
     """
     guardian = sorted(
         [c for c in candidates if c["source"] == "Guardian"],
         key=lambda x: -x["score"]["total"]
     )
-    ap = sorted(
-        [c for c in candidates if c["source"] == "AP"],
+    # Second slot: AP News or Independent (whichever _fetch_ap_rss returned)
+    second = sorted(
+        [c for c in candidates if c["source"] != "Guardian"],
         key=lambda x: -x["score"]["total"]
     )
-    selected = guardian[:1] + ap[:1]
+    selected = guardian[:1] + second[:1]
     log.info("Selected obituaries: %s",
              [(o["name"], o["source"]) for o in selected])
     return selected
@@ -1530,9 +1580,10 @@ def _obituary_card(o: dict) -> str:
     death = o.get("death_year", "?")
     years = f"({birth}–{death})" if birth != "?" else ""
     source_label = {
-        "Guardian": "The Guardian",
-        "AP":       "AP News",
-        "NYT":      "The New York Times",   # kept for back-compat if seen_items has old entries
+        "Guardian":    "The Guardian",
+        "AP":          "AP News",
+        "Independent": "The Independent",
+        "NYT":         "The New York Times",   # kept for back-compat
     }.get(o["source"], o["source"])
 
     tags = "".join(
