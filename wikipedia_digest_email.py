@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Wikipedia Biographical Digest + Obituary Digest — v9.5
+Wikipedia Biographical Digest + Obituary Digest — v9.6
 
 Sections:
   1. Wikipedia On This Day — 4 biographical entries with labelled snippets
@@ -70,6 +70,16 @@ v9.5 changes — duplicate content, nav boilerplate, tagline quality:
   - Tagline sentence splitter now handles run-together sentences ("arts.Jan")
     with no whitespace between them, not just "sentence. Sentence" form;
     character limit increased slightly to 280 to avoid mid-word truncation
+
+v9.6 changes — restructured digest: 4 items → 2 Wikipedia + 2 obituaries:
+  - Wikipedia section: now selects exactly 1 "born on this day" + 1 "died on
+    this day" (previously 4 mixed candidates); Born entry appears first
+  - Obituary section: replaced NYT (paywalled) with AP News (free, worldwide);
+    now selects 1 Guardian + 1 AP News (previously 2 NYT + 2 Guardian)
+  - AP News RSS feed: https://apnews.com/hub/obituaries.rss
+  - archive.ph override removed (was NYT-specific; AP News is freely accessible)
+  - Email copy updated: subtitle, obituary section header, footer source credits
+  - Safety net threshold lowered from 4 to 2 fresh Wikipedia candidates
 """
 
 import sys
@@ -967,14 +977,17 @@ def has_rich_anecdote(candidate: dict) -> bool:
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Step 4b — Obituary Digest (v9)
-#   Fetches recent obituaries from NYT + Guardian RSS feeds,
-#   resolves archive URLs, scores, selects 2 per publication,
-#   and generates copyright-safe 2-3 sentence teasers.
+#   Fetches recent obituaries from AP News + Guardian RSS feeds,
+#   resolves archive URLs, scores, selects 1 per publication,
+#   and generates narrative paragraph teasers.
 # ─────────────────────────────────────────────────────────────────────────────
 
 _OBITUARY_RSS_FEEDS = {
-    "NYT": "https://rss.nytimes.com/services/xml/rss/nyt/Obituaries.xml",
+    # Guardian: full free access, rich narrative obituaries
     "Guardian": "https://www.theguardian.com/tone/obituaries/rss",
+    # AP News: free wire-service obituaries, worldwide coverage
+    # Primary feed URL; if this returns empty try /rss/tag/obituaries
+    "AP": "https://apnews.com/hub/obituaries.rss",
 }
 
 
@@ -1448,14 +1461,8 @@ def fetch_obituaries() -> list:
             log.info("Resolving archive for: %s", item["title"])
             archive_url, article_text = _resolve_archive_url(item["link"])
 
-            # v9.4: For NYT, the link in the email must always point to archive.ph
-            # so the reader can open the full article (bypassing the paywall).
-            # If _resolve_archive_url() didn't land on an archive.ph URL (e.g. it
-            # fell back to og:description), we force the link URL to archive.ph/newest/…
-            if source == "NYT":
-                if "archive.ph/" not in archive_url:
-                    archive_url = f"https://archive.ph/newest/{item['link']}"
-                    log.info("NYT link overridden to archive.ph: %s", archive_url)
+            # AP News is freely accessible — no paywall override needed.
+            # (archive.ph override previously applied only to NYT; removed in v9.6)
 
             item["archive_url"]  = archive_url
             item["article_text"] = article_text
@@ -1492,16 +1499,19 @@ def fetch_obituaries() -> list:
 
 
 def select_obituaries(candidates: list) -> list:
-    """Select 2 from NYT and 2 from Guardian, best-scored."""
-    nyt = sorted(
-        [c for c in candidates if c["source"] == "NYT"],
-        key=lambda x: -x["score"]["total"]
-    )
+    """
+    v9.6: Select 1 from Guardian + 1 from AP News, best-scored each.
+    Guardian is placed first (typically richer narrative content).
+    """
     guardian = sorted(
         [c for c in candidates if c["source"] == "Guardian"],
         key=lambda x: -x["score"]["total"]
     )
-    selected = nyt[:2] + guardian[:2]
+    ap = sorted(
+        [c for c in candidates if c["source"] == "AP"],
+        key=lambda x: -x["score"]["total"]
+    )
+    selected = guardian[:1] + ap[:1]
     log.info("Selected obituaries: %s",
              [(o["name"], o["source"]) for o in selected])
     return selected
@@ -1519,7 +1529,11 @@ def _obituary_card(o: dict) -> str:
     birth = o.get("birth_year", "?")
     death = o.get("death_year", "?")
     years = f"({birth}–{death})" if birth != "?" else ""
-    source_label = "The New York Times" if o["source"] == "NYT" else "The Guardian"
+    source_label = {
+        "Guardian": "The Guardian",
+        "AP":       "AP News",
+        "NYT":      "The New York Times",   # kept for back-compat if seen_items has old entries
+    }.get(o["source"], o["source"])
 
     tags = "".join(
         f'<span style="{_OBIT_TAG}">{SIGNAL_LABELS.get(s, s)}</span>'
@@ -1791,7 +1805,7 @@ def build_email_html(people: list, date_display: str,
       <h2 style="font-size:22px;font-weight:700;color:#8b5e3c;margin:0;line-height:1.2;">
         Obituary Digest</h2>
       <p style="font-size:13px;color:#6b7280;margin:8px 0 0;">
-        Notable lives remembered this week &mdash; from The New York Times &amp; The Guardian</p>
+        Notable lives remembered this week &mdash; from The Guardian &amp; AP News</p>
     </div>
     {obit_cards}"""
 
@@ -1812,13 +1826,13 @@ def build_email_html(people: list, date_display: str,
       <h1 style="font-size:26px;font-weight:700;color:#2e6e4e;margin:0;line-height:1.2;">
         Wikipedia Biographical Digest</h1>
       <p style="font-size:14px;color:#6b7280;margin:9px 0 0;">
-        {date_display} &mdash; Four lives worth knowing about</p>
+        {date_display} &mdash; Born &amp; died on this date, plus this week&rsquo;s obituaries</p>
     </div>
     {cards}
     {obit_section}
     <p style="text-align:center;font-size:12px;color:#9ca3af;
               margin-top:12px;border-top:1px solid #e5e0d8;padding-top:20px;">
-      Generated automatically &bull; Sources: Wikipedia, NYT, The Guardian &bull; {date_display}
+      Generated automatically &bull; Sources: Wikipedia, The Guardian, AP News &bull; {date_display}
     </p>
   </div>
 </body>
@@ -1863,7 +1877,7 @@ def main():
     date_display = today.strftime("%-d %B %Y")
     date_str     = today.strftime("%Y-%m-%d")
 
-    log.info("=== Wikipedia Biographical Digest v9.2 starting for %s ===", date_str)
+    log.info("=== Wikipedia Biographical Digest v9.6 starting for %s ===", date_str)
 
     # ── v9.2: Load seen-items registry so we never repeat a bio or obituary ──
     seen = load_seen()
@@ -1887,9 +1901,9 @@ def main():
         len(candidates), skipped_count, len(fresh_candidates),
     )
 
-    # Safety net: if filtering removed too many, fall back to full pool
-    # (this prevents the digest failing on dates with very few entries)
-    if len(fresh_candidates) < 4:
+    # Safety net: if filtering removed too many, fall back to full pool.
+    # v9.6: Need at least 2 fresh candidates (1 born + 1 died).
+    if len(fresh_candidates) < 2:
         log.warning(
             "Only %d fresh candidates after seen-filter — relaxing filter for this run.",
             len(fresh_candidates),
@@ -1951,10 +1965,26 @@ def main():
         "Anecdote quality — rich: %d, dry (deferred): %d",
         len(rich_pool), len(dry_pool)
     )
+    ordered = rich_pool + dry_pool
 
-    ordered  = rich_pool + dry_pool
-    selected = select_four(ordered)
-    log.info("Selected: %s", [p["name"] for p in selected])
+    # v9.6: Pick exactly 1 born on this day + 1 died on this day.
+    # Each sub-pool is already ordered by rand_score so the top pick is
+    # the highest-scored (and freshest) person in that category.
+    born_pool = [p for p in ordered if p.get("source") == "births"]
+    died_pool = [p for p in ordered if p.get("source") == "deaths"]
+
+    # Safety: if one category is empty on a given date, pull from the other
+    if not born_pool:
+        log.warning("No 'births' candidates today — using second 'deaths' entry")
+        born_pool = died_pool[1:2]
+    if not died_pool:
+        log.warning("No 'deaths' candidates today — using second 'births' entry")
+        died_pool = born_pool[1:2]
+
+    # Born first, then Died — as the user requested
+    selected = born_pool[:1] + died_pool[:1]
+    log.info("Selected (born): %s", [p["name"] for p in born_pool[:1]])
+    log.info("Selected (died): %s", [p["name"] for p in died_pool[:1]])
 
     # ── Obituary section (fault-tolerant) ────────────────────────────────
     obituaries = []
