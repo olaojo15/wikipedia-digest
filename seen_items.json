@@ -63,6 +63,22 @@
     {
       "title": "William_F._Buckley_Jr.",
       "date": "2026-02-27"
+    },
+    {
+      "title": "Mario_Andretti",
+      "date": "2026-02-28"
+    },
+    {
+      "title": "Joseph_Stalin",
+      "date": "2026-02-28"
+    },
+    {
+      "title": "Linus_Pauling",
+      "date": "2026-02-28"
+    },
+    {
+      "title": "Neville_Cardus",
+      "date": "2026-02-28"
     }
   ],
   "obituaries": [
@@ -145,6 +161,26 @@
       "url": "https://www.theguardian.com/society/2026/feb/25/jean-wilson-obituary",
       "name": "Jean Wilson",
       "date": "2026-02-27"
+    },
+    {
+      "url": "https://www.nytimes.com/2026/02/27/arts/music/neil-sedaka-dead.html",
+      "name": "Neil Sedaka",
+      "date": "2026-02-28"
+    },
+    {
+      "url": "https://www.nytimes.com/2026/02/27/giving/iris-cantor-dead.html",
+      "name": "Iris Cantor",
+      "date": "2026-02-28"
+    },
+    {
+      "url": "https://www.theguardian.com/education/2026/feb/25/jan-ainsley-obituary",
+      "name": "Jan Ainsley",
+      "date": "2026-02-28"
+    },
+    {
+      "url": "https://www.theguardian.com/politics/2026/feb/25/michael-collins-obituary",
+      "name": "Michael Collins",
+      "date": "2026-02-28"
     }
   ]
 }
