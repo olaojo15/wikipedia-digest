@@ -79,6 +79,22 @@
     {
       "title": "Neville_Cardus",
       "date": "2026-02-28"
+    },
+    {
+      "title": "Ben_Hecht",
+      "date": "2026-02-28"
+    },
+    {
+      "title": "Brian_Jones",
+      "date": "2026-02-28"
+    },
+    {
+      "title": "Paul_Krugman",
+      "date": "2026-02-28"
+    },
+    {
+      "title": "Dino_Zoff",
+      "date": "2026-02-28"
     }
   ],
   "obituaries": [
@@ -180,6 +196,21 @@
     {
       "url": "https://www.theguardian.com/politics/2026/feb/25/michael-collins-obituary",
       "name": "Michael Collins",
+      "date": "2026-02-28"
+    },
+    {
+      "url": "https://www.nytimes.com/2026/02/27/theater/sondra-lee-dead.html",
+      "name": "Sondra Lee Dies at 97; Originated Roles in ‘Peter Pan’ and ‘Hello, Dolly!’",
+      "date": "2026-02-28"
+    },
+    {
+      "url": "https://www.nytimes.com/2026/02/26/science/edward-l-deci-dead.html",
+      "name": "Edward L. Deci",
+      "date": "2026-02-28"
+    },
+    {
+      "url": "https://www.theguardian.com/music/2026/feb/25/willie-colon-obituary",
+      "name": "Willie Colón",
       "date": "2026-02-28"
     }
   ]
