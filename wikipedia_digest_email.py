@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Wikipedia Biographical Digest + Obituary Digest — v9.6b
+Wikipedia Biographical Digest + Obituary Digest — v9.6c
 
 Sections:
   1. Wikipedia On This Day — 4 biographical entries with labelled snippets
@@ -80,6 +80,12 @@ v9.6 changes — restructured digest: 4 items → 2 Wikipedia + 2 obituaries:
   - archive.ph override removed (was NYT-specific; AP News is freely accessible)
   - Email copy updated: subtitle, obituary section header, footer source credits
   - Safety net threshold lowered from 4 to 2 fresh Wikipedia candidates
+
+v9.6c — fix: obituaries section returning empty:
+  - fetch_obituaries() rewritten with a clean two-stage structure: Guardian
+    is fetched and stored first, then _fetch_ap_rss() runs its fallback chain,
+    then both sources are processed together in a simple loop; previously the
+    AP pre-fetch could silently block Guardian from being processed at all
 """
 
 import sys
@@ -1463,31 +1469,32 @@ def _extract_obit_tagline(title: str, desc: str) -> str:
 
 def fetch_obituaries() -> list:
     """
-    Fetch recent obituaries from Guardian + AP News (or fallback to The Independent).
+    Fetch recent obituaries from Guardian + AP News (or Independent fallback).
     Returns list of scored obituary candidates.
+
+    v9.6c: Simplified to process each source in its own clean block so a
+    failure in one source can never prevent the other from being fetched.
     """
     today = datetime.date.today()
     cutoff = today - datetime.timedelta(days=7)
-
     all_obits = []
 
-    # Build the feed list: confirmed sources from the dict, then AP (with fallback)
-    feeds_to_process = list(_OBITUARY_RSS_FEEDS.items())
+    # ── Build source list: Guardian (confirmed) + AP/fallback ────────────────
+    # Guardian is always first; AP News is resolved separately with fallbacks.
+    sources: list = []
 
-    # Fetch AP News (tries multiple URLs; falls back to The Independent automatically)
+    for source, rss_url in _OBITUARY_RSS_FEEDS.items():
+        items = _fetch_rss(rss_url)
+        log.info("%s RSS: %d items", source, len(items))
+        sources.append((source, items))
+
+    # AP News: try each candidate URL; fall back to The Independent if all fail
     ap_source, ap_items = _fetch_ap_rss()
-    feeds_to_process.append((ap_source, None))   # items already fetched
-    _ap_items_cache = ap_items
+    sources.append((ap_source, ap_items))
 
-    for idx, (source, rss_url) in enumerate(feeds_to_process):
-        if rss_url is None:
-            # This is the pre-fetched AP / fallback batch
-            items = _ap_items_cache
-            log.info("%s: %d items (pre-fetched)", source, len(items))
-        else:
-            log.info("Fetching %s obituary RSS…", source)
-            items = _fetch_rss(rss_url)
-            log.info("%s RSS: %d items", source, len(items))
+    # ── Process each source independently ────────────────────────────────────
+    for source, items in sources:
+        log.info("Processing %s: %d raw items", source, len(items))
 
         # Filter to past 7 days
         recent = [
@@ -1928,7 +1935,7 @@ def main():
     date_display = today.strftime("%-d %B %Y")
     date_str     = today.strftime("%Y-%m-%d")
 
-    log.info("=== Wikipedia Biographical Digest v9.6 starting for %s ===", date_str)
+    log.info("=== Wikipedia Biographical Digest v9.6c starting for %s ===", date_str)
 
     # ── v9.2: Load seen-items registry so we never repeat a bio or obituary ──
     seen = load_seen()
