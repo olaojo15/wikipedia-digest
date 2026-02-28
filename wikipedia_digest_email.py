@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-Wikipedia Biographical Digest + Obituary Digest — v9.1
+Wikipedia Biographical Digest + Obituary Digest — v9.4
 
 Sections:
   1. Wikipedia On This Day — 4 biographical entries with labelled snippets
   2. Obituary Digest — 4 recent obituaries (2 NYT + 2 Guardian) via RSS,
-     with archive.ph / Wayback / original URL fallback
+     with archive.ph / Wayback / original URL / og:description fallback
 
 v9 changes from v8.1:
-  - Randomisation: light shuffle so repeated runs on the same date vary
-  - Obituary section: RSS feeds → archive resolution → scoring → 2-3 sentence teaser
+  - Randomisation: shuffle so repeated runs on the same date vary
+  - Obituary section: RSS feeds → archive resolution → scoring → 5-6 sentence teaser
   - Fault-tolerant: obituary failures don't block the Wikipedia section
 
 v9.1 changes — scoring refinements based on user's editorial taste:
@@ -23,6 +23,40 @@ v9.1 changes — scoring refinements based on user's editorial taste:
     speech attribution (+1.0), vivid personal detail, and origin story context
   - Expanded: diy, defiance, heretic, humanising, irony signal patterns
   - New SIGNAL_LABELS for all five new categories
+
+v9.2 changes — seen-items persistence:
+  - seen_items.json tracks sent Wikipedia titles and obituary URLs (90-day window)
+  - load_seen() / save_seen() utilities
+  - GitHub Actions YAML writes back seen_items.json after each run
+
+v9.3 changes — digest quality improvements based on review of Feb 25 & Feb 27 digests:
+  - Year extraction extended to ancient figures (pre-1000 AD); Constantine now shows
+    "(272–337)" instead of "(272–present)"
+  - JavaScript code leaked from Guardian <p> tags stripped via _is_js_contaminated()
+    and _JS_CONTAMINATION_PATTERNS filter applied in _strip_html_tags()
+  - og:description meta-tag extracted from NYT page <head> as step-4 fallback when
+    archive content < 500 chars; provides rich editorial lede even behind paywall
+  - Sentence fragments filtered from Wikipedia bio snippets via _is_sentence_fragment();
+    sentences starting mid-thought (lowercase first char, or continuation words
+    like "and/but/however/his/her/with/…") are excluded
+  - Duplicate section labels prevented in extract_anecdote() via used_labels dict;
+    second occurrence becomes "Label (II)", third "Label (III)", etc.
+  - Randomisation strengthened from uniform(0, 3) to uniform(0, 8) so day-to-day
+    and intra-day runs produce meaningfully different selections
+
+v9.4 changes — narrative teaser quality and NYT link fix:
+  - _strip_html_tags() now joins <p> tags with \\n\\n instead of a single space,
+    preserving paragraph structure for downstream teaser extraction
+  - _extract_teaser() rewritten with a paragraph-first strategy: when ≥3 paragraphs
+    are present, picks the 3 highest-scoring paragraphs and returns them joined by
+    \\n\\n (vs. the old scattered-sentence approach). Falls back to sentence-level
+    extraction for flat text (og:description, RSS descriptions)
+  - _score_text_block() helper consolidates all bonuses (quote, vivid, origin, position)
+    and is shared by both the paragraph and sentence extraction paths
+  - _obituary_card() renders multi-paragraph teasers as separate <p> elements,
+    giving the flowing editorial feel the user demonstrated with Jean Wilson's obit
+  - NYT archive_url is always forced to https://archive.ph/newest/{nyt_url},
+    ensuring the "Read the full obituary" link bypasses the paywall for the reader
 """
 
 import sys
@@ -378,12 +412,14 @@ def get_biography(title: str) -> str:
 
 def extract_years_from_bio(extract: str, category: str, api_year) -> tuple:
     """
-    Robust year extraction (v8.1):
+    Robust year extraction (v9.3):
     - Strips IPA guides and square-bracketed annotations
     - Finds ALL (YYYY–YYYY) parentheticals in the opening text
     - Picks the one with the earliest first year (= actual birth year)
       which avoids grabbing art-period ranges like (1940–1970) for Rothko
     - Falls back to complex date ranges, then born/died text patterns
+    - v9.3: Extended to handle ancient figures (pre-1000 AD) such as Constantine
+      whose birth/death years are 1–3 digit numbers
     """
     birth_year = "?"
     death_year = "present"
@@ -395,25 +431,35 @@ def extract_years_from_bio(extract: str, category: str, api_year) -> tuple:
     # Strip square-bracketed content: [O.S. 3 April], [Russian: Маркус...]
     head = re.sub(r'\[[^\[\]]{0,200}\]', '', head)
 
+    # Year pattern: covers ancient (1-999 AD) through modern (1000-2099)
+    # Ancient years are matched only when 2-4 digits (avoid matching stray numbers)
+    _YR = r'(?:1[0-9]{3}|20[0-9]{2}|[1-9]\d{1,2}|\d{3,4})'
+
     # 1. Collect ALL year-range parentheticals (both simple and complex forms)
     #    then pick the one with the earliest first year (= true birth year).
     #    This avoids grabbing art-period ranges like (1940–1970) for Rothko
     #    when the real birth–death range is (Sep 25, 1903 – Feb 25, 1970).
     candidates_yr = []
 
-    # Simple form: (YYYY–YYYY)
+    # Simple form: (YYYY–YYYY)  — includes ancient e.g. (272–337)
     for m in re.finditer(
-        r'\(\s*(\b(?:1[0-9]{3}|20[0-9]{2})\b)\s*[–\-]\s*(\b(?:1[0-9]{3}|20[0-9]{2})\b)\s*\)',
+        r'\(\s*(\b' + _YR + r'\b)\s*[–\-]\s*(\b' + _YR + r'\b)\s*\)',
         head
     ):
-        candidates_yr.append((int(m.group(1)), m.group(1), m.group(2)))
+        try:
+            candidates_yr.append((int(m.group(1)), m.group(1), m.group(2)))
+        except ValueError:
+            pass
 
-    # Complex form: (DATE YYYY – DATE YYYY)
+    # Complex form: (DATE YYYY – DATE YYYY)  — includes ancient dates
     for m in re.finditer(
-        r'\(\s*[^()]{0,100}?(\b(?:1[0-9]{3}|20[0-9]{2})\b)[^()]{0,60}?[–\-]\s*[^()]{0,60}?(\b(?:1[0-9]{3}|20[0-9]{2})\b)\s*\)',
+        r'\(\s*[^()]{0,100}?(\b' + _YR + r'\b)[^()]{0,60}?[–\-]\s*[^()]{0,60}?(\b' + _YR + r'\b)\s*\)',
         head
     ):
-        candidates_yr.append((int(m.group(1)), m.group(1), m.group(2)))
+        try:
+            candidates_yr.append((int(m.group(1)), m.group(1), m.group(2)))
+        except ValueError:
+            pass
 
     if candidates_yr:
         # Pick the candidate with the earliest first year (= birth year)
@@ -428,20 +474,33 @@ def extract_years_from_bio(extract: str, category: str, api_year) -> tuple:
     elif category == "deaths" and api_year:
         death_year = str(api_year)
 
-    # 4. Text pattern search with extended windows
+    # 4. Text pattern search with extended windows — includes ancient years
     born_m = re.search(
-        r'\bborn\b[^.]{0,120}?\b(1[0-9]{3}|20[0-9]{2})\b',
+        r'\bborn\b[^.]{0,120}?\b(' + _YR + r')\b',
         extract[:1500], re.IGNORECASE
     )
     if born_m and birth_year == "?":
         birth_year = born_m.group(1)
 
     died_m = re.search(
-        r'\bdied\b[^.]{0,80}?\b(1[0-9]{3}|20[0-9]{2})\b',
+        r'\bdied\b[^.]{0,80}?\b(' + _YR + r')\b',
         extract[:2000], re.IGNORECASE
     )
     if died_m:
         death_year = died_m.group(1)
+
+    # 5. v9.3: If death_year is still "present" but birth_year looks ancient
+    #    (< 1000), scan for a 3-4 digit number near "death" or "died" keywords
+    if death_year == "present" and birth_year != "?" and birth_year.isdigit() and int(birth_year) < 1000:
+        ancient_m = re.search(
+            r'\b(?:died?|death|executed?|murdered?|killed)\b[^.]{0,120}?\b([1-9]\d{1,3})\b',
+            extract[:3000], re.IGNORECASE
+        )
+        if ancient_m:
+            candidate = int(ancient_m.group(1))
+            # Sanity check: death year must be >= birth year
+            if candidate >= int(birth_year):
+                death_year = ancient_m.group(1)
 
     return birth_year, death_year
 
@@ -743,6 +802,35 @@ def _is_cultural_sentence(sentence: str) -> bool:
     return any(re.search(p, s) for p in _CULTURAL_SENTENCE_PATTERNS)
 
 
+# v9.3: Words that mark a sentence as a mid-thought continuation fragment.
+# Sentences beginning with these words are likely torn from a longer sentence.
+_CONTINUATION_STARTS = frozenset({
+    'and', 'but', 'or', 'nor', 'yet', 'so', 'for',
+    'however', 'although', 'though', 'while', 'whilst',
+    'which', 'who', 'whom', 'whose', 'that', 'where', 'when',
+    'because', 'since', 'after', 'before', 'until', 'once',
+    'his', 'her', 'their', 'its',
+    'with', 'through', 'via', 'upon', 'among', 'between',
+    'as', 'if', 'unless', 'despite', 'despite',
+    'including', 'having', 'being', 'making', 'leaving',
+})
+
+
+def _is_sentence_fragment(s: str) -> bool:
+    """
+    Return True if the string looks like a mid-thought sentence fragment
+    rather than a properly started sentence.
+    """
+    if not s:
+        return True
+    # Must start with an uppercase letter
+    if not s[0].isupper():
+        return True
+    # Must not begin with a continuation word
+    first_word = re.split(r'[\s,;:]', s)[0].lower().rstrip('.,;:')
+    return first_word in _CONTINUATION_STARTS
+
+
 def extract_anecdote(extract: str, signals: list) -> list:
     """
     v8: Returns a list of {"label": str, "text": str} dicts — 2 to 3 snippets
@@ -772,6 +860,7 @@ def extract_anecdote(extract: str, signals: list) -> list:
 
     snippets    = []
     total_words = 0
+    used_labels: dict = {}   # v9.3: track label usage to prevent duplicates
 
     for header, text in pool:
         if len(snippets) >= 3 or total_words >= 500:
@@ -779,7 +868,9 @@ def extract_anecdote(extract: str, signals: list) -> list:
 
         sentences = [
             s.strip() for s in re.split(r'(?<=[.!?])\s+', text)
-            if len(s.strip()) > 35 and not _is_cultural_sentence(s)
+            if len(s.strip()) > 35
+            and not _is_cultural_sentence(s)
+            and not _is_sentence_fragment(s.strip())   # v9.3: drop fragments
         ]
         if not sentences:
             continue
@@ -816,6 +907,14 @@ def extract_anecdote(extract: str, signals: list) -> list:
         if label.lower() in {"biography", "life", "overview", "introduction", "background", ""}:
             label = "Life & Character"
 
+        # v9.3: Prevent duplicate labels (e.g. two "Life & Character" sections)
+        base_label = label
+        count = used_labels.get(base_label, 0) + 1
+        used_labels[base_label] = count
+        if count > 1:
+            suffixes = ["II", "III", "IV", "V"]
+            label = f"{base_label} ({suffixes[min(count - 2, len(suffixes) - 1)]})"
+
         snippets.append({"label": label, "text": " ".join(window)})
         total_words += wc
 
@@ -823,7 +922,9 @@ def extract_anecdote(extract: str, signals: list) -> list:
         # Ultimate fallback: take up to 400 words from non-cultural extract text
         all_sents = [
             s.strip() for s in re.split(r'(?<=[.!?])\s+', extract)
-            if len(s.strip()) > 35 and not _is_cultural_sentence(s)
+            if len(s.strip()) > 35
+            and not _is_cultural_sentence(s)
+            and not _is_sentence_fragment(s.strip())
         ]
         fallback_text = []
         wc = 0
@@ -902,25 +1003,121 @@ def _fetch_rss(url: str) -> list:
     return items
 
 
-def _strip_html_tags(html: str) -> str:
-    """Basic HTML→text conversion for article extraction."""
-    text = re.sub(r'<(script|style|noscript)[^>]*>.*?</\1>', '', html,
-                  flags=re.DOTALL | re.IGNORECASE)
-    paragraphs = re.findall(r'<p[^>]*>(.*?)</p>', html, flags=re.DOTALL)
-    if paragraphs:
-        text = " ".join(paragraphs)
-    text = re.sub(r'<[^>]+>', ' ', text)
-    text = text.replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>')
-    text = text.replace('&quot;', '"').replace('&#39;', "'").replace('&nbsp;', ' ')
+_JS_CONTAMINATION_PATTERNS = [
+    # Arrow functions, method calls
+    r'=>\s*\{',
+    r'\bforEach\s*\(',
+    r'\baddEventListener\s*\(',
+    r'\bquerySelector\s*\(',
+    r'\bgetAttribute\s*\(',
+    r'\bsetAttribute\s*\(',
+    r'\bclassList\b',
+    # Variable declarations
+    r'\bconst\s+\w+\s*=',
+    r'\blet\s+\w+\s*=',
+    r'\bvar\s+\w+\s*=',
+    # Common JS constructs
+    r'\bfunction\s*\(',
+    r'\btabindex\b',
+    r'\bisOpen\b',
+    r'\bnull\b\s*:\s*\b',   # ternary null : value
+    # Guardian-specific menu JS
+    r'expandedMenu',
+    r'veggie-burger',
+    r'Clickable\w*Tags',
+]
+
+
+def _is_js_contaminated(sentence: str) -> bool:
+    """Return True if the sentence looks like leaked JavaScript code."""
+    return any(re.search(p, sentence) for p in _JS_CONTAMINATION_PATTERNS)
+
+
+def _clean_html_chunk(chunk: str) -> str:
+    """Strip tags and entities from a single HTML chunk, return plain text."""
+    text = re.sub(r'<[^>]+>', ' ', chunk)
+    text = (text
+            .replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>')
+            .replace('&quot;', '"').replace('&#39;', "'").replace('&nbsp;', ' ')
+            .replace('&#x27;', "'").replace('&#x2F;', '/'))
     text = re.sub(r'&\w+;', '', text)
     return re.sub(r'\s+', ' ', text).strip()
 
 
+def _strip_html_tags(html: str) -> str:
+    """
+    HTML→text conversion for article extraction (v9.4).
+
+    - Strips script/style/noscript blocks
+    - Extracts <p> tag content, preserving paragraph breaks as \\n\\n
+      so downstream paragraph-aware teaser extraction can work with them
+    - Filters sentences that look like leaked JavaScript code
+    - Falls back to flat-text extraction when no <p> tags found
+    """
+    # Remove entire script/style/noscript blocks first
+    clean = re.sub(r'<(script|style|noscript)[^>]*>.*?</\1>', '', html,
+                   flags=re.DOTALL | re.IGNORECASE)
+
+    paragraphs = re.findall(r'<p[^>]*>(.*?)</p>', clean, flags=re.DOTALL)
+    if paragraphs:
+        # Process each paragraph individually to preserve structure
+        clean_paras = []
+        for raw_para in paragraphs:
+            para_text = _clean_html_chunk(raw_para)
+            if not para_text:
+                continue
+            # Filter JS-contaminated sentences within this paragraph
+            sents = re.split(r'(?<=[.!?])\s+', para_text)
+            good_sents = [s for s in sents if not _is_js_contaminated(s)]
+            clean_para = ' '.join(good_sents).strip()
+            if clean_para and len(clean_para) > 20:
+                clean_paras.append(clean_para)
+        return '\n\n'.join(clean_paras)
+
+    # Fallback: no <p> tags — process as flat text
+    text = _clean_html_chunk(clean)
+    parts = re.split(r'(?<=[.!?])\s+', text)
+    return ' '.join(p for p in parts if not _is_js_contaminated(p)).strip()
+
+
+def _extract_og_description(html_head: str) -> str:
+    """
+    Extract the og:description meta tag value from page HTML.
+    Works even on paywalled pages since the <head> is always served in full.
+    The og:description is typically the editorial lede (1-3 rich sentences).
+    """
+    # Two common attribute orderings
+    for pattern in (
+        r'<meta[^>]+property=["\']og:description["\'][^>]+content=["\']([^"\']{20,})["\']',
+        r'<meta[^>]+content=["\']([^"\']{20,})["\'][^>]+property=["\']og:description["\']',
+        # Also handle name="description" as a fallback
+        r'<meta[^>]+name=["\']description["\'][^>]+content=["\']([^"\']{20,})["\']',
+        r'<meta[^>]+content=["\']([^"\']{20,})["\'][^>]+name=["\']description["\']',
+    ):
+        m = re.search(pattern, html_head, re.IGNORECASE)
+        if m:
+            desc = m.group(1).strip()
+            desc = (desc
+                    .replace('&amp;', '&').replace('&#39;', "'")
+                    .replace('&quot;', '"').replace('&lt;', '<')
+                    .replace('&gt;', '>').replace('&#x27;', "'")
+                    .replace('&#x2F;', '/'))
+            return desc
+    return ""
+
+
 def _resolve_archive_url(original_url: str) -> tuple:
     """
-    Try archive.ph → Wayback Machine → original URL.
+    Try archive.ph → Wayback Machine → original URL → og:description.
     Returns (best_url, article_text).
+
+    v9.3: When article_text < 500 chars (paywalled NYT, etc.), fetch the
+    original URL's <head> and extract the og:description meta tag, which
+    editors write as a rich lede and is served even behind a paywall.
     """
+    best_url = original_url
+    article_text = ""
+
     # 1. archive.ph
     try:
         archive_url = f"https://archive.ph/newest/{original_url}"
@@ -929,9 +1126,13 @@ def _resolve_archive_url(original_url: str) -> tuple:
             final_url = resp.url
             if "archive.ph/" in final_url:
                 html = resp.read().decode("utf-8", errors="replace")
-                return final_url, _strip_html_tags(html)
+                best_url = final_url
+                article_text = _strip_html_tags(html)
     except Exception:
         pass
+
+    if len(article_text) >= 500:
+        return best_url, article_text
 
     # 2. Wayback Machine availability API
     try:
@@ -946,20 +1147,47 @@ def _resolve_archive_url(original_url: str) -> tuple:
             req = urllib.request.Request(wb_url, headers=HEADERS)
             with urllib.request.urlopen(req, timeout=20) as resp:
                 html = resp.read().decode("utf-8", errors="replace")
-                return wb_url, _strip_html_tags(html)
+                wb_text = _strip_html_tags(html)
+                if len(wb_text) > len(article_text):
+                    best_url = wb_url
+                    article_text = wb_text
     except Exception:
         pass
+
+    if len(article_text) >= 500:
+        return best_url, article_text
 
     # 3. Original URL (Guardian often not paywalled)
     try:
         req = urllib.request.Request(original_url, headers=HEADERS)
         with urllib.request.urlopen(req, timeout=15) as resp:
             html = resp.read().decode("utf-8", errors="replace")
-            return original_url, _strip_html_tags(html)
+            direct_text = _strip_html_tags(html)
+            if len(direct_text) > len(article_text):
+                best_url = original_url
+                article_text = direct_text
     except Exception:
         pass
 
-    return original_url, ""
+    if len(article_text) >= 500:
+        return best_url, article_text
+
+    # 4. v9.3: og:description from original URL <head> (works even behind paywall)
+    #    Read only the first 15 KB — enough to capture <head> without the article body
+    try:
+        req = urllib.request.Request(original_url, headers=HEADERS)
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            partial_html = resp.read(15000).decode("utf-8", errors="replace")
+        og_desc = _extract_og_description(partial_html)
+        if og_desc:
+            log.info("og:description fallback used for %s (%d chars)", original_url, len(og_desc))
+            # Prepend og:description to whatever thin text we already have
+            article_text = og_desc + (" " + article_text if article_text else "")
+            best_url = original_url
+    except Exception:
+        pass
+
+    return best_url, article_text
 
 
 def _score_obituary_text(text: str) -> dict:
@@ -991,71 +1219,86 @@ def _score_obituary_text(text: str) -> dict:
     }
 
 
+def _score_text_block(block: str, patterns: list, position: int, total: int) -> float:
+    """
+    Score a text block (sentence or paragraph) for editorial interest.
+    Shared by both the paragraph-level and sentence-level teaser paths.
+    """
+    block_lower = block.lower()
+    hits = float(sum(1 for p in patterns if re.search(p, block_lower)))
+
+    # Direct quote bonus — user's highlights overwhelmingly feature quoted speech
+    has_quote = bool(re.search(r'["\u201c\u2018][^"\u201d\u2019]{15,}["\u201d\u2019]', block))
+    has_speech = bool(re.search(
+        r'\b(?:he|she|they)\s+(?:said|told|recalled|wrote|added|continued|explained|noted|remembered)\b',
+        block, re.IGNORECASE
+    ))
+    quote_bonus = (2.5 if has_quote else 0.0) + (1.0 if has_speech else 0.0)
+
+    # Vivid detail and origin story bonuses
+    vivid_pats  = _SECONDARY_SIGNALS.get("vivid_detail", [])
+    origin_pats = _SECONDARY_SIGNALS.get("origin_story", [])
+    vivid_bonus  = min(sum(1 for p in vivid_pats  if re.search(p, block_lower)) * 0.5, 1.5)
+    origin_bonus = min(sum(1 for p in origin_pats if re.search(p, block_lower)) * 0.3, 0.9)
+
+    # Lede preference: first 30% of blocks carry narrative context
+    pos_bonus = 0.4 if position < max(total * 0.30, 1) else 0.0
+
+    return hits + quote_bonus + vivid_bonus + origin_bonus + pos_bonus
+
+
 def _extract_teaser(text: str, signals: list) -> str:
     """
-    Extract 5-6 of the most interesting sentences from an obituary,
-    drawn from across the article for a factual summary feel.
-    Heavily favours sentences containing direct quotes and vivid details,
-    matching the user's editorial preference for "the voice of the person".
+    v9.4: Paragraph-first teaser extraction.
+
+    When the article text has ≥3 proper paragraphs (preserved from HTML <p>
+    tags by _strip_html_tags()), this picks the 3 highest-scoring paragraphs
+    and returns them joined by '\\n\\n' so the obituary card can render each
+    as its own <p> block — giving the flowing narrative the user wants
+    (e.g. the Jean Wilson-style multi-paragraph story with quotes and context).
+
+    Falls back to sentence-level extraction for flat text (og:description,
+    RSS descriptions) that has no paragraph structure.
     """
     if not text:
         return ""
 
     all_sigs = {**_PRIMARY_SIGNALS, **_SECONDARY_SIGNALS}
-    patterns = []
+    patterns: list = []
     for sig in signals:
         patterns.extend(all_sigs.get(sig, []))
     if not patterns:
         for pats in _SECONDARY_SIGNALS.values():
             patterns.extend(pats)
 
+    # ── Paragraph-level path ─────────────────────────────────────────────────
+    raw_paras = [p.strip() for p in re.split(r'\n\n+', text) if len(p.strip()) > 80]
+
+    if len(raw_paras) >= 3:
+        scored = [
+            (_score_text_block(p, patterns, i, len(raw_paras)), i, p)
+            for i, p in enumerate(raw_paras)
+        ]
+        scored.sort(key=lambda x: (-x[0], x[1]))
+        # Pick top 3, restore original order so they read as a narrative
+        top = sorted(scored[:3], key=lambda x: x[1])
+        return '\n\n'.join(t[2] for t in top)
+
+    # ── Sentence-level fallback (flat text: og:description, RSS, etc.) ───────
     sentences = [
         s.strip() for s in re.split(r'(?<=[.!?])\s+', text)
         if 40 < len(s.strip()) < 400
     ]
     if not sentences:
-        return text[:500].strip()
+        return text[:600].strip()
 
-    scored = []
-    for i, sent in enumerate(sentences):
-        hits = sum(1 for p in patterns if re.search(p, sent.lower()))
-
-        # --- QUOTE BONUS: user's highlights overwhelmingly feature direct quotes ---
-        has_quote = bool(re.search(r'["\u201c][^"\u201d]{15,}["\u201d]', sent))
-        has_speech = bool(re.search(
-            r'\b(?:he|she)\s+(?:said|told|recalled|wrote|added|continued)\b',
-            sent, re.IGNORECASE
-        ))
-        quote_bonus = 0.0
-        if has_quote:
-            quote_bonus += 2.0      # Strong boost for direct quoted speech
-        if has_speech:
-            quote_bonus += 1.0      # Boost for speech attribution
-
-        # --- VIVID DETAIL BONUS: eccentric / concrete personal detail ---
-        vivid_pats = _SECONDARY_SIGNALS.get("vivid_detail", [])
-        vivid_hits = sum(1 for p in vivid_pats if re.search(p, sent.lower()))
-        vivid_bonus = min(vivid_hits * 0.5, 1.5)
-
-        # --- ORIGIN STORY BONUS: humble beginnings, family context ---
-        origin_pats = _SECONDARY_SIGNALS.get("origin_story", [])
-        origin_hits = sum(1 for p in origin_pats if re.search(p, sent.lower()))
-        origin_bonus = min(origin_hits * 0.3, 0.9)
-
-        # Slight preference for earlier sentences (more context)
-        pos_bonus = 0.3 if i < len(sentences) * 0.4 else 0.0
-
-        total = hits + quote_bonus + vivid_bonus + origin_bonus + pos_bonus
-        scored.append((total, i, sent))
-
-    scored.sort(key=lambda x: (-x[0], x[1]))
-
-    # Take top 6 sentences, re-ordered by their original position
-    # so the teaser reads coherently
-    top_indices = sorted([s[1] for s in scored[:6]])
-    picked = [sentences[i] for i in top_indices]
-
-    return " ".join(picked)
+    scored_s = [
+        (_score_text_block(s, patterns, i, len(sentences)), i, s)
+        for i, s in enumerate(sentences)
+    ]
+    scored_s.sort(key=lambda x: (-x[0], x[1]))
+    top_indices = sorted(s[1] for s in scored_s[:6])
+    return " ".join(sentences[i] for i in top_indices)
 
 
 def _extract_obit_years(title: str, desc: str, text: str) -> tuple:
@@ -1139,6 +1382,16 @@ def fetch_obituaries() -> list:
         for item in top_n:
             log.info("Resolving archive for: %s", item["title"])
             archive_url, article_text = _resolve_archive_url(item["link"])
+
+            # v9.4: For NYT, the link in the email must always point to archive.ph
+            # so the reader can open the full article (bypassing the paywall).
+            # If _resolve_archive_url() didn't land on an archive.ph URL (e.g. it
+            # fell back to og:description), we force the link URL to archive.ph/newest/…
+            if source == "NYT":
+                if "archive.ph/" not in archive_url:
+                    archive_url = f"https://archive.ph/newest/{item['link']}"
+                    log.info("NYT link overridden to archive.ph: %s", archive_url)
+
             item["archive_url"]  = archive_url
             item["article_text"] = article_text
 
@@ -1209,7 +1462,25 @@ def _obituary_card(o: dict) -> str:
     )
     tags_block = f'<div style="margin-top:13px;">{tags}</div>' if tags else ""
 
-    teaser = o.get("teaser", "")
+    # v9.4: render multi-paragraph teasers as separate <p> blocks so the
+    # narrative flows like a proper editorial piece rather than a run-on string.
+    raw_teaser = o.get("teaser", "")
+    _para_style = (
+        'style="font-size:15px;line-height:1.78;color:#2d2d2d;'
+        'margin:0 0 14px 0;"'
+    )
+    _para_last_style = (
+        'style="font-size:15px;line-height:1.78;color:#2d2d2d;margin:0;"'
+    )
+    teaser_paras = [p.strip() for p in re.split(r'\n\n+', raw_teaser) if p.strip()]
+    if len(teaser_paras) > 1:
+        teaser_html = "".join(
+            f'<p {_para_style}>{p}</p>' if idx < len(teaser_paras) - 1
+            else f'<p {_para_last_style}>{p}</p>'
+            for idx, p in enumerate(teaser_paras)
+        )
+    else:
+        teaser_html = f'<p {_para_last_style}>{raw_teaser}</p>'
 
     return f"""
     <div style="background:#ffffff;border:1px solid #e5ddd4;border-radius:12px;
@@ -1222,8 +1493,8 @@ def _obituary_card(o: dict) -> str:
         <p style="font-size:14px;color:#555;font-style:italic;margin:6px 0 0;">{o['tagline']}</p>
       </div>
       <p style="font-size:11px;font-weight:700;color:#8b5e3c;letter-spacing:.1em;
-                text-transform:uppercase;margin:16px 0 7px;">The Anecdote</p>
-      <p style="font-size:15px;line-height:1.78;color:#2d2d2d;margin:0;">{teaser}</p>
+                text-transform:uppercase;margin:16px 0 12px;">The Anecdote</p>
+      {teaser_html}
       {tags_block}
       <a href="{o['archive_url']}"
          style="display:inline-block;margin-top:18px;font-size:14px;
@@ -1580,9 +1851,10 @@ def main():
 
     log.info("Scored %d biographies", len(scored))
 
-    # Light randomisation so repeated runs on the same date vary.
+    # v9.3: Stronger randomisation so day-to-day AND intra-day runs vary meaningfully.
+    # uniform(0, 8) is wide enough to regularly re-order the ranked pool.
     for p in scored:
-        p["_rand_score"] = p["score"]["total"] + random.uniform(0, 3)
+        p["_rand_score"] = p["score"]["total"] + random.uniform(0, 8)
     ranked = sorted(scored, key=lambda x: -x["_rand_score"])
 
     # Prefer candidates with rich personal anecdotes; defer dry ones
