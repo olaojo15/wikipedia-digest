@@ -135,6 +135,14 @@
     {
       "title": "Trader_Joe's",
       "date": "2026-02-28"
+    },
+    {
+      "title": "Glenn_Miller",
+      "date": "2026-03-01"
+    },
+    {
+      "title": "Arthur_Koestler",
+      "date": "2026-03-01"
     }
   ],
   "obituaries": [
@@ -267,6 +275,11 @@
       "url": "https://www.theguardian.com/tv-and-radio/2026/feb/25/gregory-de-polnay-obituary",
       "name": "Gregory de Polnay",
       "date": "2026-02-28"
+    },
+    {
+      "url": "https://www.theguardian.com/technology/2026/feb/26/riaz-hasan-obituary",
+      "name": "Riaz Hasan",
+      "date": "2026-03-01"
     }
   ]
 }
