@@ -151,6 +151,14 @@
     {
       "title": "Philip_K._Dick",
       "date": "2026-03-02"
+    },
+    {
+      "title": "Alexander_Graham_Bell",
+      "date": "2026-03-03"
+    },
+    {
+      "title": "Danny_Kaye",
+      "date": "2026-03-03"
     }
   ],
   "obituaries": [
@@ -293,6 +301,11 @@
       "url": "https://www.theguardian.com/politics/2026/mar/02/ken-weetch-obituary",
       "name": "Ken Weetch",
       "date": "2026-03-02"
+    },
+    {
+      "url": "https://www.theguardian.com/tv-and-radio/2026/mar/03/kenith-trodd-obituary",
+      "name": "Kenith Trodd",
+      "date": "2026-03-03"
     }
   ]
 }
