@@ -159,6 +159,14 @@
     {
       "title": "Danny_Kaye",
       "date": "2026-03-03"
+    },
+    {
+      "title": "Chris_Rea",
+      "date": "2026-03-04"
+    },
+    {
+      "title": "Jean-François_Champollion",
+      "date": "2026-03-04"
     }
   ],
   "obituaries": [
@@ -306,6 +314,11 @@
       "url": "https://www.theguardian.com/tv-and-radio/2026/mar/03/kenith-trodd-obituary",
       "name": "Kenith Trodd",
       "date": "2026-03-03"
+    },
+    {
+      "url": "https://www.theguardian.com/media/2026/mar/03/drusilla-beyfus-obituary",
+      "name": "Drusilla Beyfus",
+      "date": "2026-03-04"
     }
   ]
 }
