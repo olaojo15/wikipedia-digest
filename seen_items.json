@@ -167,6 +167,14 @@
     {
       "title": "Jean-François_Champollion",
       "date": "2026-03-04"
+    },
+    {
+      "title": "Pier_Paolo_Pasolini",
+      "date": "2026-03-05"
+    },
+    {
+      "title": "Hugo_Chávez",
+      "date": "2026-03-05"
     }
   ],
   "obituaries": [
@@ -319,6 +327,11 @@
       "url": "https://www.theguardian.com/media/2026/mar/03/drusilla-beyfus-obituary",
       "name": "Drusilla Beyfus",
       "date": "2026-03-04"
+    },
+    {
+      "url": "https://www.theguardian.com/books/2026/mar/01/mags-webster-obituary",
+      "name": "Mags Webster",
+      "date": "2026-03-05"
     }
   ]
 }
