@@ -175,6 +175,14 @@
     {
       "title": "Hugo_Chávez",
       "date": "2026-03-05"
+    },
+    {
+      "title": "Gabriel_García_Márquez",
+      "date": "2026-03-06"
+    },
+    {
+      "title": "Ayn_Rand",
+      "date": "2026-03-06"
     }
   ],
   "obituaries": [
@@ -332,6 +340,11 @@
       "url": "https://www.theguardian.com/books/2026/mar/01/mags-webster-obituary",
       "name": "Mags Webster",
       "date": "2026-03-05"
+    },
+    {
+      "url": "https://www.theguardian.com/world/2026/mar/01/ayatollah-ali-khamenei-obituary",
+      "name": "Ayatollah Ali Khamenei",
+      "date": "2026-03-06"
     }
   ]
 }
