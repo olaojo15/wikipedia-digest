@@ -183,6 +183,14 @@
     {
       "title": "Ayn_Rand",
       "date": "2026-03-06"
+    },
+    {
+      "title": "Piet_Mondrian",
+      "date": "2026-03-07"
+    },
+    {
+      "title": "Stanley_Kubrick",
+      "date": "2026-03-07"
     }
   ],
   "obituaries": [
@@ -345,6 +353,11 @@
       "url": "https://www.theguardian.com/world/2026/mar/01/ayatollah-ali-khamenei-obituary",
       "name": "Ayatollah Ali Khamenei",
       "date": "2026-03-06"
+    },
+    {
+      "url": "https://www.theguardian.com/artanddesign/2026/mar/05/david-harding-obituary",
+      "name": "David Harding",
+      "date": "2026-03-07"
     }
   ]
 }
