@@ -191,6 +191,14 @@
     {
       "title": "Stanley_Kubrick",
       "date": "2026-03-07"
+    },
+    {
+      "title": "Gary_Numan",
+      "date": "2026-03-08"
+    },
+    {
+      "title": "George_Martin",
+      "date": "2026-03-08"
     }
   ],
   "obituaries": [
@@ -358,6 +366,11 @@
       "url": "https://www.theguardian.com/artanddesign/2026/mar/05/david-harding-obituary",
       "name": "David Harding",
       "date": "2026-03-07"
+    },
+    {
+      "url": "https://www.theguardian.com/stage/2026/mar/06/des-de-moor-obituary",
+      "name": "Des de Moor",
+      "date": "2026-03-08"
     }
   ]
 }
