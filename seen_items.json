@@ -207,6 +207,14 @@
     {
       "title": "Mary_Anning",
       "date": "2026-03-09"
+    },
+    {
+      "title": "Bix_Beiderbecke",
+      "date": "2026-03-10"
+    },
+    {
+      "title": "Jean_Giraud",
+      "date": "2026-03-10"
     }
   ],
   "obituaries": [
@@ -384,6 +392,11 @@
       "url": "https://www.theguardian.com/music/2026/mar/06/peter-millson-obituary",
       "name": "Peter Millson",
       "date": "2026-03-09"
+    },
+    {
+      "url": "https://www.theguardian.com/books/2026/mar/10/roland-huntford-obituary",
+      "name": "Roland Huntford",
+      "date": "2026-03-10"
     }
   ]
 }
