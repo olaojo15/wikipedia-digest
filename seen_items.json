@@ -215,6 +215,14 @@
     {
       "title": "Jean_Giraud",
       "date": "2026-03-10"
+    },
+    {
+      "title": "Henry_Cowell",
+      "date": "2026-03-11"
+    },
+    {
+      "title": "Charles_Sumner",
+      "date": "2026-03-11"
     }
   ],
   "obituaries": [
@@ -397,6 +405,11 @@
       "url": "https://www.theguardian.com/books/2026/mar/10/roland-huntford-obituary",
       "name": "Roland Huntford",
       "date": "2026-03-10"
+    },
+    {
+      "url": "https://www.theguardian.com/world/2026/mar/10/antonio-tejero-obituary",
+      "name": "Antonio Tejero",
+      "date": "2026-03-11"
     }
   ]
 }
