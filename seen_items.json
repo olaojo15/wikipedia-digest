@@ -223,6 +223,14 @@
     {
       "title": "Charles_Sumner",
       "date": "2026-03-11"
+    },
+    {
+      "title": "Mitt_Romney",
+      "date": "2026-03-12"
+    },
+    {
+      "title": "Terry_Pratchett",
+      "date": "2026-03-12"
     }
   ],
   "obituaries": [
@@ -410,6 +418,11 @@
       "url": "https://www.theguardian.com/world/2026/mar/10/antonio-tejero-obituary",
       "name": "Antonio Tejero",
       "date": "2026-03-11"
+    },
+    {
+      "url": "https://www.theguardian.com/business/2026/mar/08/eamonn-hughes-obituary",
+      "name": "Eamonn Hughes",
+      "date": "2026-03-12"
     }
   ]
 }
