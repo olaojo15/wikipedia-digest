@@ -231,6 +231,14 @@
     {
       "title": "Terry_Pratchett",
       "date": "2026-03-12"
+    },
+    {
+      "title": "L._Ron_Hubbard",
+      "date": "2026-03-13"
+    },
+    {
+      "title": "Susan_B._Anthony",
+      "date": "2026-03-13"
     }
   ],
   "obituaries": [
@@ -423,6 +431,11 @@
       "url": "https://www.theguardian.com/business/2026/mar/08/eamonn-hughes-obituary",
       "name": "Eamonn Hughes",
       "date": "2026-03-12"
+    },
+    {
+      "url": "https://www.theguardian.com/books/2026/mar/13/peter-jones-obituary",
+      "name": "Peter Jones",
+      "date": "2026-03-13"
     }
   ]
 }
