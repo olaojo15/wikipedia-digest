@@ -255,6 +255,14 @@
     {
       "title": "Talaat_Pasha",
       "date": "2026-03-15"
+    },
+    {
+      "title": "James_Madison",
+      "date": "2026-03-16"
+    },
+    {
+      "title": "Thomas_E._Dewey",
+      "date": "2026-03-16"
     }
   ],
   "obituaries": [
@@ -462,6 +470,11 @@
       "url": "https://www.theguardian.com/world/2026/mar/15/jurgen-habermas-obituary",
       "name": "Jürgen Habermas",
       "date": "2026-03-15"
+    },
+    {
+      "url": "https://www.theguardian.com/tv-and-radio/2026/mar/13/eric-allan-obituary",
+      "name": "Eric Allan",
+      "date": "2026-03-16"
     }
   ]
 }
