@@ -263,6 +263,14 @@
     {
       "title": "Thomas_E._Dewey",
       "date": "2026-03-16"
+    },
+    {
+      "title": "John_Wayne_Gacy",
+      "date": "2026-03-17"
+    },
+    {
+      "title": "Marcus_Aurelius",
+      "date": "2026-03-17"
     }
   ],
   "obituaries": [
@@ -475,6 +483,11 @@
       "url": "https://www.theguardian.com/tv-and-radio/2026/mar/13/eric-allan-obituary",
       "name": "Eric Allan",
       "date": "2026-03-16"
+    },
+    {
+      "url": "https://www.theguardian.com/science/2026/mar/17/anthony-leggett-obituary",
+      "name": "Sir Anthony Leggett",
+      "date": "2026-03-17"
     }
   ]
 }
