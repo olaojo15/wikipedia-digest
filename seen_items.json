@@ -271,6 +271,14 @@
     {
       "title": "Marcus_Aurelius",
       "date": "2026-03-17"
+    },
+    {
+      "title": "Nikolai_Rimsky-Korsakov",
+      "date": "2026-03-18"
+    },
+    {
+      "title": "Farouk_of_Egypt",
+      "date": "2026-03-18"
     }
   ],
   "obituaries": [
@@ -488,6 +496,11 @@
       "url": "https://www.theguardian.com/science/2026/mar/17/anthony-leggett-obituary",
       "name": "Sir Anthony Leggett",
       "date": "2026-03-17"
+    },
+    {
+      "url": "https://www.theguardian.com/books/2026/mar/17/len-deighton-obituary",
+      "name": "Len Deighton",
+      "date": "2026-03-18"
     }
   ]
 }
