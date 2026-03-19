@@ -279,6 +279,14 @@
     {
       "title": "Farouk_of_Egypt",
       "date": "2026-03-18"
+    },
+    {
+      "title": "Robert_F._Kennedy",
+      "date": "2026-03-19"
+    },
+    {
+      "title": "Arthur_C._Clarke",
+      "date": "2026-03-19"
     }
   ],
   "obituaries": [
@@ -501,6 +509,11 @@
       "url": "https://www.theguardian.com/books/2026/mar/17/len-deighton-obituary",
       "name": "Len Deighton",
       "date": "2026-03-18"
+    },
+    {
+      "url": "https://www.theguardian.com/lifeandstyle/2026/mar/19/margareta-magnusson-obituary",
+      "name": "Margareta Magnusson",
+      "date": "2026-03-19"
     }
   ]
 }
