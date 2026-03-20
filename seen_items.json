@@ -287,6 +287,14 @@
     {
       "title": "Arthur_C._Clarke",
       "date": "2026-03-19"
+    },
+    {
+      "title": "Sting_(wrestler)",
+      "date": "2026-03-20"
+    },
+    {
+      "title": "Ferdinand_Foch",
+      "date": "2026-03-20"
     }
   ],
   "obituaries": [
@@ -514,6 +522,11 @@
       "url": "https://www.theguardian.com/lifeandstyle/2026/mar/19/margareta-magnusson-obituary",
       "name": "Margareta Magnusson",
       "date": "2026-03-19"
+    },
+    {
+      "url": "https://www.theguardian.com/artanddesign/2026/mar/20/philip-castle-obituary",
+      "name": "Philip Castle",
+      "date": "2026-03-20"
     }
   ]
 }
